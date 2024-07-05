@@ -134,10 +134,10 @@ example_garments = [
     "images/fourth.png",
     "images/third.png",
     "images/first.png",
-    "images/fifth.png",
+    "images/fifth.jpeg",
     "images/sixth.png",
-    "images/seven.png",
-    "images/eight.png",
+    "images/seven.jpeg",
+    "images/eight.jpeg",
 ]
 
 css = """
