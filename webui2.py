@@ -16,7 +16,6 @@ import json
 # Set up environment variables for sharing data
 os.environ['GRADIO_PUBLIC_URL'] = ''
 os.environ['GENERATED_IMAGE_PATH'] = ''
-os.environ['GENERATION_PROGRESS'] = '0'
 
 def custom_exception_handler(exc_type, exc_value, exc_traceback):
     print("An unhandled exception occurred:")
@@ -113,7 +112,6 @@ def virtual_try_on(clothes_image, person_image, inpaint_mask):
         ])
 
         task = worker.AsyncTask(args=args)
-        task.set_progress_callback(lambda progress: os.environ.update({'GENERATION_PROGRESS': str(progress)}))
         worker.async_tasks.append(task)
 
         while not task.processing:
@@ -140,32 +138,21 @@ example_garments = [
 
 css = """
 ... (your existing CSS)
-.loading-bar {
-    width: 100%;
-    height: 4px;
-    background-color: #f3f3f3;
-    position: relative;
-    overflow: hidden;
-    margin-top: 10px;
-    margin-bottom: 10px;
+.loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255,255,255,.3);
+    border-radius: 50%;
+    border-top-color: #fff;
+    animation: spin 1s ease-in-out infinite;
+    -webkit-animation: spin 1s ease-in-out infinite;
 }
-.loading-bar::after {
-    content: '';
-    display: block;
-    position: absolute;
-    left: -200px;
-    width: 200px;
-    height: 4px;
-    background-color: #3498db;
-    animation: loading 2s linear infinite;
+@keyframes spin {
+    to { -webkit-transform: rotate(360deg); }
 }
-@keyframes loading {
-    from {left: -200px; width: 30%;}
-    50% {width: 30%;}
-    70% {width: 70%;}
-    80% {left: 50%;}
-    95% {left: 120%;}
-    to {left: 100%;}
+@-webkit-keyframes spin {
+    to { -webkit-transform: rotate(360deg); }
 }
 """
 
@@ -187,10 +174,10 @@ with gr.Blocks(css=css) as demo:
 
         with gr.Column(scale=1):
             gr.Markdown("### Upload Your Photo")
-            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", height=400)  # Increased height
+            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", height=400)
 
     try_on_button = gr.Button("Try It On!", elem_classes="try-on-button")
-    loading_indicator = gr.HTML('<div class="loading-bar"></div>', visible=False)
+    loading_indicator = gr.HTML('<div class="loading"></div>', visible=False)
     try_on_output = gr.Image(label="Virtual Try-On Result", visible=False)
     image_link = gr.HTML(visible=True, elem_classes="result-links")
     error_output = gr.Textbox(label="Error", visible=False)
@@ -199,6 +186,7 @@ with gr.Blocks(css=css) as demo:
         return example_garments[evt.index]
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
+
 
     def process_virtual_try_on(clothes_image, person_image):
         if clothes_image is None or person_image is None:
@@ -244,6 +232,7 @@ with gr.Blocks(css=css) as demo:
         inputs=[clothes_input, person_input],
         outputs=[loading_indicator, try_on_output, image_link, error_output]
     )
+
 
     gr.Markdown(
         """
