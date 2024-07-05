@@ -156,6 +156,9 @@ css = """
 @-webkit-keyframes spin {
     to { -webkit-transform: rotate(360deg); }
 }
+.person-image-upload {
+    min-height: 400px !important;
+}
 """
 
 with gr.Blocks(css=css) as demo:
@@ -176,10 +179,10 @@ with gr.Blocks(css=css) as demo:
 
         with gr.Column(scale=1):
             gr.Markdown("### Upload Your Photo")
-            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas")
+            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", elem_classes="person-image-upload")
 
     try_on_button = gr.Button("Try It On!", elem_classes="try-on-button")
-    progress_bar = gr.Progress(label="Generation Progress", show_progress=True, visible=False)
+    progress_bar = gr.Progress(label="Processing")
     try_on_output = gr.Image(label="Virtual Try-On Result", visible=False)
     image_link = gr.HTML(visible=True, elem_classes="result-links")
     error_output = gr.Textbox(label="Error", visible=False)
@@ -189,51 +192,48 @@ with gr.Blocks(css=css) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image):
+    def process_virtual_try_on(clothes_image, person_image, progress=gr.Progress()):
         if clothes_image is None or person_image is None:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True), gr.update(visible=False)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True)
         
         inpaint_image = person_image['image']
         inpaint_mask = person_image['mask']
         
         if inpaint_mask is None or np.sum(inpaint_mask) == 0:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please draw a mask on the person image to indicate where to apply the garment.", visible=True), gr.update(visible=False)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please draw a mask on the person image to indicate where to apply the garment.", visible=True)
         
-        # Show progress bar
-        yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=0)
+        progress(0, desc="Preparing images")
         
         result = virtual_try_on(clothes_image, inpaint_image, inpaint_mask)
         
         if result['success']:
-            # Wait for the generated_image_path to be captured
             timeout = 30  # seconds
             start_time = time.time()
             while not os.environ['GENERATED_IMAGE_PATH']:
                 if time.time() - start_time > timeout:
-                    yield gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True), gr.update(visible=False), gr.update(visible=False)
-                    return
-                progress = int(os.environ.get('GENERATION_PROGRESS', 0))
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=progress)
+                    return gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True), gr.update(visible=False)
+                progress((time.time() - start_time) / timeout * 100, desc="Generating image")
                 time.sleep(0.5)
             
             generated_image_path = os.environ['GENERATED_IMAGE_PATH']
             gradio_url = os.environ['GRADIO_PUBLIC_URL']
             
+            progress(100, desc="Finalizing")
+            
             if gradio_url and generated_image_path:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
                 link_html = f'<a href="{output_image_link}" target="_blank">Click here to view the generated image</a>'
                 
-                # Hide progress bar and show the result
-                yield gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False), gr.update(visible=False)
+                return gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
             else:
-                yield gr.update(visible=False), gr.update(value=f"Unable to generate public link. Local file path: {generated_image_path}", visible=True), gr.update(visible=False), gr.update(visible=False)
+                return gr.update(visible=False), gr.update(value=f"Unable to generate public link. Local file path: {generated_image_path}", visible=True), gr.update(visible=False)
         else:
-            yield gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True), gr.update(visible=False)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
 
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input],
-        outputs=[try_on_output, image_link, error_output, progress_bar]
+        outputs=[try_on_output, image_link, error_output]
     )
 
     gr.Markdown(
@@ -246,7 +246,7 @@ with gr.Blocks(css=css) as demo:
         Experience the future of online shopping with ArbiTryOn - where technology meets style!
         """
     )
-
+    
 demo.queue()
 
 def custom_launch():
