@@ -131,9 +131,13 @@ def virtual_try_on(clothes_image, person_image, inpaint_mask):
 
 example_garments = [
     "images/first.png",
-    "images/second.png",
+    "images/fourth.png",
     "images/third.png",
     "images/first.png",
+    "images/fifth.png",
+    "images/sixth.png",
+    "images/seven.png",
+    "images/eight.png",
 ]
 
 css = """
