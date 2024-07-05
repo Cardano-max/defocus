@@ -140,24 +140,32 @@ example_garments = [
 
 css = """
 ... (your existing CSS)
-.loading {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid rgba(255,255,255,.3);
-    border-radius: 50%;
-    border-top-color: #fff;
-    animation: spin 1s ease-in-out infinite;
-    -webkit-animation: spin 1s ease-in-out infinite;
+.loading-bar {
+    width: 100%;
+    height: 4px;
+    background-color: #f3f3f3;
+    position: relative;
+    overflow: hidden;
+    margin-top: 10px;
+    margin-bottom: 10px;
 }
-@keyframes spin {
-    to { -webkit-transform: rotate(360deg); }
+.loading-bar::after {
+    content: '';
+    display: block;
+    position: absolute;
+    left: -200px;
+    width: 200px;
+    height: 4px;
+    background-color: #3498db;
+    animation: loading 2s linear infinite;
 }
-@-webkit-keyframes spin {
-    to { -webkit-transform: rotate(360deg); }
-}
-.person-image-upload {
-    min-height: 400px !important;
+@keyframes loading {
+    from {left: -200px; width: 30%;}
+    50% {width: 30%;}
+    70% {width: 70%;}
+    80% {left: 50%;}
+    95% {left: 120%;}
+    to {left: 100%;}
 }
 """
 
@@ -179,10 +187,10 @@ with gr.Blocks(css=css) as demo:
 
         with gr.Column(scale=1):
             gr.Markdown("### Upload Your Photo")
-            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", elem_classes="person-image-upload")
+            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", height=400)  # Increased height
 
     try_on_button = gr.Button("Try It On!", elem_classes="try-on-button")
-    progress_bar = gr.Progress(label="Processing")
+    loading_indicator = gr.HTML('<div class="loading-bar"></div>', visible=False)
     try_on_output = gr.Image(label="Virtual Try-On Result", visible=False)
     image_link = gr.HTML(visible=True, elem_classes="result-links")
     error_output = gr.Textbox(label="Error", visible=False)
@@ -192,48 +200,49 @@ with gr.Blocks(css=css) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image, progress=gr.Progress()):
+    def process_virtual_try_on(clothes_image, person_image):
         if clothes_image is None or person_image is None:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True)
         
         inpaint_image = person_image['image']
         inpaint_mask = person_image['mask']
         
         if inpaint_mask is None or np.sum(inpaint_mask) == 0:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(value="Please draw a mask on the person image to indicate where to apply the garment.", visible=True)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Please draw a mask on the person image to indicate where to apply the garment.", visible=True)
         
-        progress(0, desc="Preparing images")
+        # Show loading indicator
+        yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
         result = virtual_try_on(clothes_image, inpaint_image, inpaint_mask)
         
         if result['success']:
+            # Wait for the generated_image_path to be captured
             timeout = 30  # seconds
             start_time = time.time()
             while not os.environ['GENERATED_IMAGE_PATH']:
                 if time.time() - start_time > timeout:
-                    return gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True), gr.update(visible=False)
-                progress((time.time() - start_time) / timeout * 100, desc="Generating image")
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True), gr.update(visible=False)
+                    return
                 time.sleep(0.5)
             
             generated_image_path = os.environ['GENERATED_IMAGE_PATH']
             gradio_url = os.environ['GRADIO_PUBLIC_URL']
             
-            progress(100, desc="Finalizing")
-            
             if gradio_url and generated_image_path:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
                 link_html = f'<a href="{output_image_link}" target="_blank">Click here to view the generated image</a>'
                 
-                return gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
+                # Hide loading indicator and show the result
+                yield gr.update(visible=False), gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
             else:
-                return gr.update(visible=False), gr.update(value=f"Unable to generate public link. Local file path: {generated_image_path}", visible=True), gr.update(visible=False)
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(value=f"Unable to generate public link. Local file path: {generated_image_path}", visible=True), gr.update(visible=False)
         else:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
+            yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
 
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input],
-        outputs=[try_on_output, image_link, error_output]
+        outputs=[loading_indicator, try_on_output, image_link, error_output]
     )
 
     gr.Markdown(
@@ -246,7 +255,8 @@ with gr.Blocks(css=css) as demo:
         Experience the future of online shopping with ArbiTryOn - where technology meets style!
         """
     )
-    
+
+
 demo.queue()
 
 def custom_launch():
