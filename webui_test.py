@@ -6,14 +6,9 @@ import sys
 import os
 import numpy as np
 import modules.config
-import modules.async_worker as worker
-import modules.constants as constants
-import modules.flags as flags
 from modules.util import HWC3, resize_image
 from modules.private_logger import get_current_html_path
 from modules.masking import mask_clothes
-import json
-import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
@@ -141,18 +136,13 @@ with gr.Blocks(css=css) as demo:
             # Wait for the generated_image_path to be captured
             timeout = 30  # seconds
             start_time = time.time()
-            while not os.environ['GENERATED_IMAGE_PATH']:
-                if time.time() - start_time > timeout:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True)
-                    return
-                time.sleep(0.5)
             
-            generated_image_path = os.environ['GENERATED_IMAGE_PATH']
+            # generated_image_path = os.environ['GENERATED_IMAGE_PATH']
             masked_image_path = os.environ['MASKED_IMAGE_PATH']
             gradio_url = os.environ['GRADIO_PUBLIC_URL']
             
-            if gradio_url and generated_image_path and masked_image_path:
-                output_image_link = f"{gradio_url}/file={generated_image_path}"
+            if gradio_url and masked_image_path:
+                output_image_link = f"{gradio_url}/file={masked_image_path"
                 masked_image_link = f"{gradio_url}/file={masked_image_path}"
                 link_html = f'<a href="{output_image_link}" target="_blank">View generated image</a> | <a href="{masked_image_link}" target="_blank">View masked image</a>'
                 
