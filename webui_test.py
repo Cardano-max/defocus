@@ -142,14 +142,14 @@ with gr.Blocks(css=css) as demo:
             gradio_url = os.environ['GRADIO_PUBLIC_URL']
             
             if gradio_url and masked_image_path:
-                output_image_link = f"{gradio_url}/file={masked_image_path"
+                output_image_link = f"{gradio_url}/file={masked_image_path}"
                 masked_image_link = f"{gradio_url}/file={masked_image_path}"
                 link_html = f'<a href="{output_image_link}" target="_blank">View generated image</a> | <a href="{masked_image_link}" target="_blank">View masked image</a>'
                 
                 # Hide loading indicator and show the results
-                yield gr.update(visible=False), gr.update(value=masked_image_path, visible=True), gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
+                yield gr.update(visible=False), gr.update(value=masked_image_path, visible=True), gr.update(value=masked_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
             else:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=f"Unable to generate public links. Local file paths: Generated: {generated_image_path}, Masked: {masked_image_path}", visible=True), gr.update(visible=False)
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=f"Unable to generate public links. Local file paths: Generated: {masked_image_path}, Masked: {masked_image_path}", visible=True), gr.update(visible=False)
         else:
             yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
 
