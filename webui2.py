@@ -12,10 +12,17 @@ import modules.flags as flags
 from modules.util import HWC3, resize_image
 from modules.private_logger import get_current_html_path
 import json
+import torch
+from PIL import Image
+import matplotlib.pyplot as plt
+import io
+import cv2
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 
 # Set up environment variables for sharing data
 os.environ['GRADIO_PUBLIC_URL'] = ''
 os.environ['GENERATED_IMAGE_PATH'] = ''
+os.environ['MASKED_IMAGE_PATH'] = ''
 
 def custom_exception_handler(exc_type, exc_value, exc_traceback):
     print("An unhandled exception occurred:")
@@ -24,16 +31,76 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
-def virtual_try_on(clothes_image, person_image, inpaint_mask):
+# Initialize Segformer model and processor
+processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
+model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
+
+def generate_mask(image):
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = model(**inputs)
+    logits = outputs.logits.cpu()
+
+    upsampled_logits = torch.nn.functional.interpolate(
+        logits,
+        size=image.size[::-1],
+        mode="bilinear",
+        align_corners=False,
+    )
+
+    pred_seg = upsampled_logits.argmax(dim=1)[0]
+    labels = [4, 14, 15]  # Upper Clothes 4, Left Arm 14, Right Arm 15
+
+    combined_mask = torch.zeros_like(pred_seg, dtype=torch.bool)
+    for label in labels:
+        combined_mask = torch.logical_or(combined_mask, pred_seg == label)
+
+    pred_seg_new = torch.zeros_like(pred_seg)
+    pred_seg_new[combined_mask] = 255
+
+    image_mask = pred_seg_new.numpy().astype(np.uint8)
+
+    kernel_size = 50
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    dilated_mask = cv2.dilate(image_mask, kernel, iterations=1)
+
+    return dilated_mask
+
+def virtual_try_on(clothes_image, person_image):
     try:
+        # Convert person_image to PIL Image
+        person_pil = Image.fromarray(person_image)
+
+        # Generate mask
+        inpaint_mask = generate_mask(person_pil)
+
+        # Resize images and mask
+        target_size = (512, 512)
         clothes_image = HWC3(clothes_image)
         person_image = HWC3(person_image)
         inpaint_mask = HWC3(inpaint_mask)[:, :, 0]
 
-        target_size = (512, 512)
         clothes_image = resize_image(clothes_image, target_size[0], target_size[1])
         person_image = resize_image(person_image, target_size[0], target_size[1])
         inpaint_mask = resize_image(inpaint_mask, target_size[0], target_size[1])
+
+        # Display and save the mask
+        plt.figure(figsize=(10, 10))
+        plt.imshow(inpaint_mask, cmap='gray')
+        plt.axis('off')
+        
+        # Save the plot to a byte buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        buf.seek(0)
+        
+        # Save the mask image
+        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
+        with open(masked_image_path, 'wb') as f:
+            f.write(buf.getvalue())
+        
+        plt.close()  # Close the plot to free up memory
+
+        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
         loras = []
         for lora in modules.config.default_loras:
@@ -120,7 +187,7 @@ def virtual_try_on(clothes_image, person_image, inpaint_mask):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0]}
+            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
@@ -130,18 +197,73 @@ def virtual_try_on(clothes_image, person_image, inpaint_mask):
         return {"success": False, "error": str(e)}
 
 example_garments = [
-    "images/first.png",
-    "images/fourth.png",
-    "images/third.png",
-    "images/first.png",
-    "images/fifth.jpeg",
-    "images/sixth.png",
-    "images/seven.jpeg",
-    "images/eight.jpeg",
+    "images/1.png",
+    "images/2.png",
+    "images/3.png",
+    "images/4.png",
+    "images/5.png",
+    "images/6.png",
+    "images/7.png",
+    "images/8.png",
 ]
 
 css = """
-... (your existing CSS)
+.header {
+    text-align: center;
+    max-width: 700px;
+    margin: 0 auto;
+    padding-top: 20px;
+}
+.title {
+    font-size: 40px;
+    font-weight: bold;
+    color: #2c3e50;
+    margin-bottom: 10px;
+}
+.subtitle {
+    font-size: 18px;
+    color: #34495e;
+}
+.example-garments {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+}
+.example-garments img {
+    max-width: 150px;
+    margin: 10px;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease;
+}
+.example-garments img:hover {
+    transform: scale(1.05);
+}
+.try-on-button {
+    background-color: #3498db;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 18px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+.try-on-button:hover {
+    background-color: #2980b9;
+}
+.result-links {
+    margin-top: 20px;
+    text-align: center;
+}
+.result-links a {
+    color: #3498db;
+    text-decoration: none;
+    margin: 0 10px;
+}
+.result-links a:hover {
+    text-decoration: underline;
+}
 .loading {
     display: inline-block;
     width: 20px;
@@ -164,24 +286,25 @@ with gr.Blocks(css=css) as demo:
     gr.HTML(
         """
         <div class="header">
-            <h1 class="title">ArbiTryOn (Beta)</h1>
-            <p class="subtitle">Experience Arbisoft's merchandise with our virtual try-on system!</p>
+            <h1 class="title">ArbiTryOn</h1>
+            <p class="subtitle">Experience Arbisoft's merchandise with our cutting-edge virtual try-on system!</p>
         </div>
         """
     )
 
     with gr.Row():
-        with gr.Column(scale=1):
+        with gr.Column(scale=3):
             gr.Markdown("### Choose a Garment")
             example_garment_gallery = gr.Gallery(value=example_garments, columns=2, rows=2, label="Example Garments", elem_class="example-garments")
             clothes_input = gr.Image(label="Selected Garment", source="upload", type="numpy")
 
-        with gr.Column(scale=1):
+        with gr.Column(scale=3):
             gr.Markdown("### Upload Your Photo")
-            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", tool="sketch", elem_id="inpaint_canvas", height=400)
+            person_input = gr.Image(label="Your Photo", source="upload", type="numpy")
 
     try_on_button = gr.Button("Try It On!", elem_classes="try-on-button")
     loading_indicator = gr.HTML('<div class="loading"></div>', visible=False)
+    masked_output = gr.Image(label="Masked Image", visible=False)
     try_on_output = gr.Image(label="Virtual Try-On Result", visible=False)
     image_link = gr.HTML(visible=True, elem_classes="result-links")
     error_output = gr.Textbox(label="Error", visible=False)
@@ -191,21 +314,14 @@ with gr.Blocks(css=css) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-
     def process_virtual_try_on(clothes_image, person_image):
         if clothes_image is None or person_image is None:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True)
-        
-        inpaint_image = person_image['image']
-        inpaint_mask = person_image['mask']
-        
-        if inpaint_mask is None or np.sum(inpaint_mask) == 0:
-            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Please draw a mask on the person image to indicate where to apply the garment.", visible=True)
+            return gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Please upload both a garment image and a person image.", visible=True)
         
         # Show loading indicator
-        yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+        yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
-        result = virtual_try_on(clothes_image, inpaint_image, inpaint_mask)
+        result = virtual_try_on(clothes_image, person_image)
         
         if result['success']:
             # Wait for the generated_image_path to be captured
@@ -213,42 +329,42 @@ with gr.Blocks(css=css) as demo:
             start_time = time.time()
             while not os.environ['GENERATED_IMAGE_PATH']:
                 if time.time() - start_time > timeout:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True), gr.update(visible=False)
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value="Timeout waiting for image generation.", visible=True)
                     return
                 time.sleep(0.5)
             
             generated_image_path = os.environ['GENERATED_IMAGE_PATH']
+            masked_image_path = os.environ['MASKED_IMAGE_PATH']
             gradio_url = os.environ['GRADIO_PUBLIC_URL']
             
-            if gradio_url and generated_image_path:
+            if gradio_url and generated_image_path and masked_image_path:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
-                link_html = f'<a href="{output_image_link}" target="_blank">Click here to view the generated image</a>'
+                masked_image_link = f"{gradio_url}/file={masked_image_path}"
+                link_html = f'<a href="{output_image_link}" target="_blank">View generated image</a> | <a href="{masked_image_link}" target="_blank">View masked image</a>'
                 
-                # Hide loading indicator and show the result
-                yield gr.update(visible=False), gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
+                # Hide loading indicator and show the results
+                yield gr.update(visible=False), gr.update(value=masked_image_path, visible=True), gr.update(value=generated_image_path, visible=True), gr.update(value=link_html, visible=True), gr.update(visible=False)
             else:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(value=f"Unable to generate public link. Local file path: {generated_image_path}", visible=True), gr.update(visible=False)
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=f"Unable to generate public links. Local file paths: Generated: {generated_image_path}, Masked: {masked_image_path}", visible=True), gr.update(visible=False)
         else:
-            yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
+            yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(value=result['error'], visible=True)
 
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input],
-        outputs=[loading_indicator, try_on_output, image_link, error_output]
+        outputs=[loading_indicator, masked_output, try_on_output, image_link, error_output]
     )
-
 
     gr.Markdown(
         """
         ## How It Works
         1. Choose a garment from our examples or upload your own.
-        2. Upload a photo of yourself and use the brush tool to indicate where you want the garment placed.
+        2. Upload a photo of yourself.
         3. Click "Try It On!" to see the magic happen!
 
         Experience the future of online shopping with ArbiTryOn - where technology meets style!
         """
     )
-
 
 demo.queue()
 

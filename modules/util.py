@@ -16,6 +16,7 @@ import modules.sdxl_styles
 LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
 HASH_SHA256_LENGTH = 10
 
+
 def erode_or_dilate(x, k):
     k = int(k)
     if k > 0:
