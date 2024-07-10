@@ -7,7 +7,6 @@ processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_cloth
 model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
 
 def mask_clothes(image, labels=[4,14,15]):
-    # image = Image.open("/content/images.jpeg")
     inputs = processor(images=image, return_tensors="pt")
 
 
