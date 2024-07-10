@@ -38,7 +38,7 @@ def virtual_try_on(clothes_image, person_image):
         clothes_image = HWC3(clothes_image)
         person_image = HWC3(person_image)
 
-        target_size = (1152, 896)
+        target_size = (512, 512)
         clothes_image = resize_image(clothes_image, target_size[0], target_size[1])
         person_image = resize_image(person_image, target_size[0], target_size[1])
 
