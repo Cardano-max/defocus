@@ -17,8 +17,6 @@ LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.L
 HASH_SHA256_LENGTH = 10
 
 
-def inpaint_image()
-
 def erode_or_dilate(x, k):
     k = int(k)
     if k > 0:
