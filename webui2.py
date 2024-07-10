@@ -233,7 +233,7 @@ with gr.Blocks(css=css) as demo:
         
         if result['success']:
             # Wait for the generated_image_path to be captured
-            timeout = 30  # seconds
+            timeout = 40  # seconds
             start_time = time.time()
             while not os.environ['GENERATED_IMAGE_PATH']:
                 if time.time() - start_time > timeout:
