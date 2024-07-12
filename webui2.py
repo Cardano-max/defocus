@@ -786,7 +786,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         """
     )
 
-demo.queue().launch(server_port=8080)
+demo.queue().launch()
 
 # def custom_launch():
 #     app, local_url, share_url = demo.launch(share=True, prevent_thread_lock=True)
