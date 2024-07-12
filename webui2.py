@@ -786,18 +786,18 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         """
     )
 
-demo.queue()
+demo.queue().launch()
 
-def custom_launch():
-    app, local_url, share_url = demo.launch(share=True, prevent_thread_lock=True)
+# def custom_launch():
+#     app, local_url, share_url = demo.launch(share=True, prevent_thread_lock=True)
     
-    if share_url:
-        os.environ['GRADIO_PUBLIC_URL'] = share_url
-        print(f"Running on public URL: {share_url}")
+#     if share_url:
+#         os.environ['GRADIO_PUBLIC_URL'] = share_url
+#         print(f"Running on public URL: {share_url}")
     
-    return app, local_url, share_url
+#     return app, local_url, share_url
 
-custom_launch()
+# custom_launch()
 
 # Keep the script running
 while True:
