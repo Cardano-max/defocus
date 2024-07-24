@@ -155,8 +155,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
         for lora in modules.config.default_loras:
             loras.extend(lora)
 
-        # Enhance prompt
-        enhanced_prompt = enhance_prompt("Wearing a new garment", category_input)
+        # # Enhance prompt
+        # enhanced_prompt = enhance_prompt("Wearing a new garment", category_input)
 
         args = [
             True,
