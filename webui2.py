@@ -26,9 +26,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
-from modules.util import HWC3, resize_image, get_image_shape_ceil
-from modules.upscaler import perform_upscale
-import modules.core as core
 
 
 def image_to_base64(img_path):
@@ -58,23 +55,6 @@ task_queue = Queue()
 queue_lock = Lock()
 current_task_event = Event()
 queue_update_event = Event()
-
-def calculate_target_resolution(width, height, max_size=1024):
-    aspect_ratio = height / width
-    if width > height:
-        new_width = min(width, max_size)
-        new_height = int(new_width * aspect_ratio)
-    else:
-        new_height = min(height, max_size)
-        new_width = int(new_height / aspect_ratio)
-    return new_width, new_height
-
-def smart_resize(image, target_width, target_height):
-    from modules.util import resize_image, get_image_shape_ceil
-    current_shape_ceil = get_image_shape_ceil(image)
-    if current_shape_ceil < 1024:
-        image = perform_upscale(image)
-    return resize_image(image, target_width, target_height)
 
 # Function to send email (using Mailpit for demonstration)
 def send_feedback_email(rating, comment):
@@ -113,7 +93,10 @@ def virtual_try_on(clothes_image, person_image, category_input):
             "Lower Body": "lower_body",
             "Full Body": "dresses"
         }
+        print(f"Category Input: {category_input}")
+        
         category = categories.get(category_input, "upper_body")
+        print(f"Using category: {category}")
         
         # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
@@ -122,13 +105,22 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
         orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Calculate target resolution
-        target_width, target_height = calculate_target_resolution(orig_person_w, orig_person_h)
+        # Calculate the aspect ratio of the person image
+        person_aspect_ratio = orig_person_h / orig_person_w
+
+        # Set target width and calculate corresponding height to maintain aspect ratio
+        target_width = 1024
+        target_height = int(target_width * person_aspect_ratio)
+
+        # Ensure target height is also 1024 at maximum
+        if target_height > 1024:
+            target_height = 1024
+            target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
-        clothes_image = smart_resize(HWC3(clothes_image), target_width, target_height)
-        person_image = smart_resize(HWC3(person_image), target_width, target_height)
-        inpaint_mask = smart_resize(HWC3(inpaint_mask), target_width, target_height)
+        clothes_image = resize_image(HWC3(clothes_image), target_width, target_height)
+        person_image = resize_image(HWC3(person_image), target_width, target_height)
+        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
@@ -154,9 +146,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
-
-        # # Enhance prompt
-        # enhanced_prompt = enhance_prompt("Wearing a new garment", category_input)
 
         args = [
             True,
@@ -206,11 +195,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
             200,
             flags.refiner_swap_method,
             0.5,
-            True,  # Enable FreeU
-            1.01,  # FreeU b1
-            1.02,  # FreeU b2
-            0.99,  # FreeU s1
-            0.95,  # FreeU s2
+            False,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
             False,
             False,
             modules.config.default_inpaint_engine_version,
