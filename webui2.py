@@ -149,7 +149,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            aspect_ratio,
+            aspect_ratio,  # Use the calculated aspect ratio
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
@@ -232,7 +232,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
-        
+
 example_garments = [
     "images/b1.png",
     "images/b2.jpeg",
