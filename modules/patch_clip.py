@@ -122,7 +122,7 @@ def patched_SDClipModel_forward(self, tokens):
                 if tokens[x, y] == max_token:
                     break
 
-    outputs = self.transformer(input_ids=tokens, attention_mask=attention_mask,
+    outputs = self.transformer(inputs_embeds=backup_embeds(tokens), attention_mask=attention_mask,
                                output_hidden_states=self.layer == "hidden")
     self.transformer.set_input_embeddings(backup_embeds)
 
@@ -144,7 +144,6 @@ def patched_SDClipModel_forward(self, tokens):
         pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
 
     return z.float(), pooled_output
-
 
 def patched_ClipVisionModel__init__(self, json_config):
     config = CLIPVisionConfig.from_json_file(json_config)
