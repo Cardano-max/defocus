@@ -27,7 +27,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.upscaler import perform_upscale
-from modules.controlnet import load_controlnet, apply_controlnet
+# from modules.controlnet import load_controlnet, apply_controlnet
 from modules.sampler import k_sampling
 from modules.freeu import apply_freeu
 from modules.refiner import load_refiner, apply_refiner
@@ -61,8 +61,8 @@ queue_lock = Lock()
 current_task_event = Event()
 queue_update_event = Event()
 
-# Load controlnet models
-controlnet_canny = load_controlnet('control_v11p_sd15_canny.pth')
+# # Load controlnet models
+# controlnet_canny = load_controlnet('control_v11p_sd15_canny.pth')
 
 # Function to send email (using Mailpit for demonstration)
 def send_feedback_email(rating, comment):
@@ -249,9 +249,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            # Apply controlnet
-            canny_image = get_canny_image(person_image)
-            positive_cond, negative_cond = apply_controlnet(task.positive_cond, task.negative_cond, controlnet_canny, canny_image, 0.5, 0, 1)
+            # # Apply controlnet
+            # canny_image = get_canny_image(person_image)
+            # positive_cond, negative_cond = apply_controlnet(task.positive_cond, task.negative_cond, controlnet_canny, canny_image, 0.5, 0, 1)
 
             # Apply FreeU
             model = apply_freeu(task.model, b1=1.01, b2=1.02, s1=0.99, s2=0.95)
