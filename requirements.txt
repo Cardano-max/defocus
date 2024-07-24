@@ -1,0 +1,12 @@
+opencv-python
+Pillow
+onnxruntime==1.17.0
+einops==0.7.0
+transformers==4.36.2
+diffusers==0.25.0
+torch
+torchvision
+matplotlib
+scipy
+scikit-image
+basicsr
