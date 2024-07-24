@@ -55,6 +55,7 @@ queue_lock = Lock()
 current_task_event = Event()
 queue_update_event = Event()
 
+
 # Function to send email (using Mailpit for demonstration)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
@@ -554,10 +555,10 @@ def process_queue():
         task = task_queue.get()
         if task is None:
             break
-        clothes_image, person_image, result_callback = task
+        clothes_image, person_image, category_input, result_callback = task
         current_task_event.set()
         queue_update_event.set()
-        result = virtual_try_on(clothes_image, person_image)
+        result = virtual_try_on(clothes_image, person_image, category_input)
         current_task_event.clear()
         result_callback(result)
         task_queue.task_done()
@@ -633,7 +634,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image):
+    def process_virtual_try_on(clothes_image, person_image, category_input):
         if clothes_image is None or person_image is None:
             yield {
                 loading_indicator: gr.update(visible=False),
@@ -665,7 +666,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
         with queue_lock:
             current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, result_callback))
+            task_queue.put((clothes_image, person_image, category_input, result_callback))
 
         generation_done = False
         generation_result = None
@@ -761,7 +762,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     try_on_button.click(
         process_virtual_try_on,
-        inputs=[clothes_input, person_input],
+        inputs=[clothes_input, person_input, category_input],
         outputs=[loading_indicator, status_info, masked_output, try_on_output, image_link, error_output, queue_note, feedback_row]
     )
 
