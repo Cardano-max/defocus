@@ -17,7 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -27,10 +27,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
-
-# Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+
+# Load CLIP model for image analysis
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -63,6 +65,51 @@ queue_update_event = Event()
 # Garment cache
 garment_cache = {}
 garment_cache_lock = Lock()
+
+def analyze_image(image):
+    # Convert numpy array to PIL Image
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
+    
+    # Prepare image for CLIP
+    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
+    
+    # Get image features
+    with torch.no_grad():
+        image_features = clip_model.get_image_features(**inputs)
+    
+    # Use CLIP to get the most relevant labels
+    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
+                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
+                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
+                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
+    
+    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        text_features = clip_model.get_text_features(**text_inputs)
+    
+    # Calculate similarities
+    similarities = (image_features @ text_features.T).squeeze(0)
+    
+    # Get top 5 most similar labels
+    top_5_indices = similarities.argsort(descending=True)[:5]
+    top_5_labels = [candidate_labels[i] for i in top_5_indices]
+    
+    return top_5_labels
+
+def generate_inpaint_prompt(garment_image, person_image):
+    garment_labels = analyze_image(garment_image)
+    person_labels = analyze_image(person_image)
+    
+    garment_description = ", ".join(garment_labels)
+    person_description = ", ".join(person_labels)
+    
+    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
+    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
+    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
+    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
+    
+    return prompt
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -189,6 +236,10 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
+        # Generate dynamic inpaint prompt
+        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
+        print(f"Generated inpaint prompt: {inpaint_prompt}")
+
         # Define loras here
         loras = []
         for lora in modules.config.default_loras:
@@ -217,7 +268,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            "Wearing a new garment",
+            inpaint_prompt,  # Use the dynamically generated prompt
             inpaint_mask,
             True,
             True,
