@@ -26,7 +26,12 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
-
+from modules.upscaler import perform_upscale
+from modules.controlnet import load_controlnet, apply_controlnet
+from modules.sampler import k_sampling
+from modules.freeu import apply_freeu
+from modules.refiner import load_refiner, apply_refiner
+from modules.prompt_processor import process_prompt
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -56,10 +61,13 @@ queue_lock = Lock()
 current_task_event = Event()
 queue_update_event = Event()
 
+# Load controlnet models
+controlnet_canny = load_controlnet('control_v11p_sd15_canny.pth')
+
 # Function to send email (using Mailpit for demonstration)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
+    receiver_email = "feedback@arbitryon.com"
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -70,7 +78,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
+        with smtplib.SMTP("localhost", 1025) as server:
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -78,7 +86,24 @@ def send_feedback_email(rating, comment):
         print(f"Failed to send feedback email: {str(e)}")
         return False
 
+def calculate_resolution(width, height, target=1024):
+    aspect_ratio = width / height
+    if width > height:
+        new_width = target
+        new_height = int(target / aspect_ratio)
+    else:
+        new_height = target
+        new_width = int(target * aspect_ratio)
+    return new_width, new_height
 
+def encode_vae_inpaint(vae, pixels, mask):
+    pixels = pixels * (1 - mask) + 0.5 * mask
+    latent = vae.encode(pixels)
+    return latent, mask
+
+def get_canny_image(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    return cv2.Canny(gray, 100, 200)
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
@@ -105,19 +130,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
         orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Calculate the aspect ratio of the person image
-        person_aspect_ratio = orig_person_h / orig_person_w
+        # Calculate the new resolution
+        target_width, target_height = calculate_resolution(orig_clothes_w, orig_clothes_h)
 
-        # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
-        target_height = int(target_width * person_aspect_ratio)
-
-        # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
-            target_width = int(target_height / person_aspect_ratio)
-
-        # Resize images while preserving aspect ratio
+        # Upscale and resize images
+        clothes_image = perform_upscale(clothes_image)
+        person_image = perform_upscale(person_image)
         clothes_image = resize_image(HWC3(clothes_image), target_width, target_height)
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
@@ -147,9 +165,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         for lora in modules.config.default_loras:
             loras.extend(lora)
 
+        # Process prompt
+        prompt = process_prompt("Wearing a new garment, highly detailed, intricate design, perfect fit")
+
         args = [
             True,
-            "",
+            prompt,
             modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
@@ -228,7 +249,28 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path}
+            # Apply controlnet
+            canny_image = get_canny_image(person_image)
+            positive_cond, negative_cond = apply_controlnet(task.positive_cond, task.negative_cond, controlnet_canny, canny_image, 0.5, 0, 1)
+
+            # Apply FreeU
+            model = apply_freeu(task.model, b1=1.01, b2=1.02, s1=0.99, s2=0.95)
+
+            # Advanced sampling
+            samples = k_sampling(model, task.noise, positive_cond, negative_cond, task.cfg_scale, task.steps)
+
+            # Apply refiner
+            refiner = load_refiner('sd_xl_refiner_1.0.safetensors')
+            refined_samples = apply_refiner(refiner, samples, positive_cond, negative_cond, task.cfg_scale, task.steps // 2)
+
+            # Decode the refined samples
+            decoded_samples = task.vae.decode(refined_samples)
+
+            # Save the result
+            result_path = os.path.join(modules.config.path_outputs, f"result_{int(time.time())}.png")
+            Image.fromarray(decoded_samples[0].cpu().numpy()).save(result_path)
+
+            return {"success": True, "image_path": result_path, "masked_image_path": masked_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
@@ -256,7 +298,6 @@ example_garments = [
     "images/b16.png",
     "images/b17.png",
     "images/b18.png",
-
 ]
 
 # Subtle loading messages
@@ -276,7 +317,6 @@ error_messages = [
     "Looks like we're experiencing a slight style delay. Thanks for your patience!",
     "Our virtual dressing room is temporarily out of order. We're fixing it up!",
 ]
-
 
 css = """
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Roboto:wght@300;400;700&display=swap');
@@ -366,7 +406,6 @@ css = """
         position: relative;
         overflow: hidden;
     }
-
     .try-on-button::before {
         content: '';
         position: absolute;
@@ -545,6 +584,7 @@ css = """
         color: #06bee1;
     }
 """
+
 def process_queue():
     while True:
         task = task_queue.get()
@@ -588,7 +628,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             category_input = gr.Radio(
                 choices=["Upper Body", "Lower Body", "Full Body"],
                 label="Select a Category",
-                value="Upper"  # Default value
+                value="Upper Body"  # Default value
                 )
 
     gr.HTML(f"""

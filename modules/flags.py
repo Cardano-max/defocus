@@ -133,7 +133,7 @@ class Performance(Enum):
 
 
 performance_selections = [
-    ('Quality <span style="color: grey;"> \U00002223 45 steps</span>', Performance.QUALITY.value),
-    ('Speed <span style="color: grey;"> \U00002223 25 steps</span>', Performance.SPEED.value),
+    ('Quality <span style="color: grey;"> \U00002223 60 steps</span>', Performance.QUALITY.value),
+    ('Speed <span style="color: grey;"> \U00002223 45 steps</span>', Performance.SPEED.value),
     ('Extreme Speed <span style="color: grey;"> \U00002223 8 steps</span>', Performance.EXTREME_SPEED.value)
 ]
