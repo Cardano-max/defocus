@@ -578,6 +578,13 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         """
     )
 
+    # Add this near where you define other input components
+    category_input = gr.Radio(
+        choices=["Upper Body", "Lower Body", "Full Body"],
+        label="Select a Category",
+        value="Upper Body"  # Default value
+    )
+
     with gr.Row():
         with gr.Column(scale=3):
             gr.Markdown("### Step 1: Select a Garment")
@@ -587,6 +594,22 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         with gr.Column(scale=3):
             gr.Markdown("### Step 2: Upload Your Photo")
             person_input = gr.Image(label="Your Photo", source="upload", type="numpy")
+        
+        with gr.Column(scale=3):
+            gr.Markdown("### Step 3: Select Category")
+            category_input = gr.Radio(
+                choices=["Upper Body", "Lower Body", "Full Body"],
+                label="Select a Category",
+                value="Upper Body"
+            )
+        with gr.Column(scale=3):
+            # Radio buttons for category selection
+            category_input = gr.Radio(
+                choices=["Upper Body", "Lower Body", "Full Body"],
+                label="Select a Category",
+                value="Upper"  # Default value
+                )
+            
 
     gr.HTML(f"""
         <div class="instruction-images">
