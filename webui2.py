@@ -107,18 +107,25 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_person_h, orig_person_w = person_image.shape[:2]
 
         # Define a maximum dimension (you can adjust this)
-        max_dim = 1024
+        max_dim = 2048
+
+        # Calculate scaling factors
+        scale_clothes = min(max_dim / orig_clothes_w, max_dim / orig_clothes_h)
+        scale_person = min(max_dim / orig_person_w, max_dim / orig_person_h)
+
+        # Calculate new dimensions
+        new_clothes_w = int(orig_clothes_w * scale_clothes)
+        new_clothes_h = int(orig_clothes_h * scale_clothes)
+        new_person_w = int(orig_person_w * scale_person)
+        new_person_h = int(orig_person_h * scale_person)
 
         # Resize images while preserving aspect ratio
-        clothes_image = resize_image(HWC3(clothes_image), max_dim, max_dim)
-        person_image = resize_image(HWC3(person_image), max_dim, max_dim)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), max_dim, max_dim)
-
-        # Get the new dimensions
-        person_h, person_w = person_image.shape[:2]
+        clothes_image = resize_image(HWC3(clothes_image), new_clothes_w, new_clothes_h)
+        person_image = resize_image(HWC3(person_image), new_person_w, new_person_h)
+        inpaint_mask = resize_image(HWC3(inpaint_mask), new_person_w, new_person_h)
 
         # Set the aspect ratio based on the resized person image
-        aspect_ratio = f"{person_w}*{person_h}"
+        aspect_ratio = f"{new_person_w}*{new_person_h}"
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -231,7 +238,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print(f"Error in virtual_try_on: {str(e)}")
         traceback.print_exc()
         return {"success": False, "error": str(e)}
-
 
 example_garments = [
     "images/b1.png",
