@@ -633,7 +633,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image, category_input):
+    def process_virtual_try_on(clothes_image, person_image):
         if clothes_image is None or person_image is None:
             yield {
                 loading_indicator: gr.update(visible=False),
@@ -665,7 +665,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
         with queue_lock:
             current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, category_input, result_callback))
+            task_queue.put((clothes_image, person_image, result_callback))
 
         generation_done = False
         generation_result = None
