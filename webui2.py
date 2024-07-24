@@ -25,30 +25,6 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from Masking.masking import Masking
-import os
-import traceback
-import math
-import numpy as np
-import torch
-import time
-import shared
-import random
-import copy
-import cv2
-import modules.default_pipeline as pipeline
-import modules.core as core
-import modules.flags as flags
-import modules.config
-import modules.patch
-import ldm_patched.modules.model_management
-import extras.preprocessors as preprocessors
-import modules.inpaint_worker as inpaint_worker
-import modules.constants as constants
-import extras.ip_adapter as ip_adapter
-import extras.face_crop
-import fooocus_version
-import args_manager
 
 
 def image_to_base64(img_path):
@@ -70,8 +46,9 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
-# Initialize Masker
-masker = Masking()
+# Initialize Segformer model and processor
+processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
+model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
 
 # Initialize queue and locks
 task_queue = Queue()
@@ -102,53 +79,53 @@ def send_feedback_email(rating, comment):
         return False
 
 
+def generate_mask(image):
+    inputs = processor(images=image, return_tensors="pt")
+    outputs = model(**inputs)
+    logits = outputs.logits.cpu()
 
-def virtual_try_on(clothes_image, person_image, category_input):
+    upsampled_logits = torch.nn.functional.interpolate(
+        logits,
+        size=image.size[::-1],
+        mode="bilinear",
+        align_corners=False,
+    )
+
+    pred_seg = upsampled_logits.argmax(dim=1)[0]
+    labels = [4, 14, 15, 6, 12, 13]  # Upper Clothes 4, Left Arm 14, Right Arm 15
+
+    combined_mask = torch.zeros_like(pred_seg, dtype=torch.bool)
+    for label in labels:
+        combined_mask = torch.logical_or(combined_mask, pred_seg == label)
+
+    pred_seg_new = torch.zeros_like(pred_seg)
+    pred_seg_new[combined_mask] = 255
+
+    image_mask = pred_seg_new.numpy().astype(np.uint8)
+
+    kernel_size = 50
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    dilated_mask = cv2.dilate(image_mask, kernel, iterations=1)
+
+    return dilated_mask
+
+def virtual_try_on(clothes_image, person_image):
     try:
-        # Convert person_image to PIL Image if it's not already
-        if not isinstance(person_image, Image.Image):
-            person_pil = Image.fromarray(person_image)
-        else:
-            person_pil = person_image
+        # Convert person_image to PIL Image
+        person_pil = Image.fromarray(person_image)
 
-        categories = {
-            "Upper Body": "upper_body",
-            "Lower Body": "lower_body",
-            "Full Body": "dresses"
-        }
-        print(f"Category Input: {category_input}")
-        
-        # Safely get the category, defaulting to "upper_body" if not found
-        category = categories.get(category_input, "upper_body")
-        print(f"Using category: {category}")
-        
         # Generate mask
-        inpaint_mask = masker.get_mask(person_pil, category=category)
+        inpaint_mask = generate_mask(person_pil)
 
-        # Get the original dimensions
-        orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
-        orig_person_h, orig_person_w = person_image.shape[:2]
+        # Resize images and mask
+        target_size = (1024, 1024)
+        clothes_image = HWC3(clothes_image)
+        person_image = HWC3(person_image)
+        inpaint_mask = HWC3(inpaint_mask)[:, :, 0]
 
-        # Define a maximum dimension (you can adjust this)
-        max_dim = 2048
-
-        # Calculate scaling factors
-        scale_clothes = min(max_dim / orig_clothes_w, max_dim / orig_clothes_h)
-        scale_person = min(max_dim / orig_person_w, max_dim / orig_person_h)
-
-        # Calculate new dimensions
-        new_clothes_w = int(orig_clothes_w * scale_clothes)
-        new_clothes_h = int(orig_clothes_h * scale_clothes)
-        new_person_w = int(orig_person_w * scale_person)
-        new_person_h = int(orig_person_h * scale_person)
-
-        # Resize images while preserving aspect ratio
-        clothes_image = resize_image(HWC3(clothes_image), new_clothes_w, new_clothes_h)
-        person_image = resize_image(HWC3(person_image), new_person_w, new_person_h)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), new_person_w, new_person_h)
-
-        # Set the aspect ratio based on the resized person image
-        aspect_ratio = f"{new_person_w}*{new_person_h}"
+        clothes_image = resize_image(clothes_image, target_size[0], target_size[1])
+        person_image = resize_image(person_image, target_size[0], target_size[1])
+        inpaint_mask = resize_image(inpaint_mask, target_size[0], target_size[1])
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -167,7 +144,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
@@ -179,7 +155,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            aspect_ratio,  # Use the calculated aspect ratio
+            modules.config.default_aspect_ratio,
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
@@ -258,7 +234,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             return {"success": False, "error": "No results generated"}
 
     except Exception as e:
-        print(f"Error in virtual_try_on: {str(e)}")
+        print("Error in virtual_try_on:", str(e))
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
@@ -575,10 +551,10 @@ def process_queue():
         task = task_queue.get()
         if task is None:
             break
-        clothes_image, person_image, category_input, result_callback = task
+        clothes_image, person_image, result_callback = task
         current_task_event.set()
         queue_update_event.set()
-        result = virtual_try_on(clothes_image, person_image, category_input)
+        result = virtual_try_on(clothes_image, person_image)
         current_task_event.clear()
         result_callback(result)
         task_queue.task_done()
@@ -607,14 +583,6 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         with gr.Column(scale=3):
             gr.Markdown("### Step 2: Upload Your Photo")
             person_input = gr.Image(label="Your Photo", source="upload", type="numpy")
-        
-        with gr.Column(scale=3):
-            # Radio buttons for category selection
-            category_input = gr.Radio(
-                choices=["Upper Body", "Lower Body", "Full Body"],
-                label="Select a Category",
-                value="Upper"  # Default value
-                )
 
     gr.HTML(f"""
         <div class="instruction-images">
@@ -662,7 +630,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image, category_input):
+    def process_virtual_try_on(clothes_image, person_image):
         if clothes_image is None or person_image is None:
             yield {
                 loading_indicator: gr.update(visible=False),
@@ -694,7 +662,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
         with queue_lock:
             current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, category_input, result_callback))
+            task_queue.put((clothes_image, person_image, result_callback))
 
         generation_done = False
         generation_result = None
@@ -790,7 +758,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     try_on_button.click(
         process_virtual_try_on,
-        inputs=[clothes_input, person_input, category_input],
+        inputs=[clothes_input, person_input],
         outputs=[loading_indicator, status_info, masked_output, try_on_output, image_link, error_output, queue_note, feedback_row]
     )
 
