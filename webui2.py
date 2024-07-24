@@ -26,6 +26,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
+from modules.util import HWC3, resize_image, get_image_shape_ceil
+from modules.upscaler import perform_upscale
+import modules.core as core
 
 
 def image_to_base64(img_path):
