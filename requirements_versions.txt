@@ -30,3 +30,12 @@ basicsr
 pillow
 opencv-python
 insightface
+torch
+diffusers
+transformers
+safetensors
+pillow
+numpy
+gdown
+realesrgan
+basicsr

@@ -26,6 +26,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
+from modules.image_restoration import restore_image
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
@@ -65,14 +66,14 @@ garment_cache_lock = Lock()
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
-    # Generate a unique key for the garment image
+    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
-    # Process the garment image (resize, etc.)
+    # Processing the garment image (resize, etc.)
     processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
@@ -80,7 +81,7 @@ def process_and_cache_garment(garment_image):
     
     return processed_garment
 
-# Function to send email (using Mailpit for demonstration)
+# Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
     receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
@@ -102,10 +103,28 @@ def send_feedback_email(rating, comment):
         print(f"Failed to send feedback email: {str(e)}")
         return False
 
+def check_image_quality(image):
+    # Convert to PIL Image if it's a numpy array
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
+    
+    width, height = image.size
+    resolution = width * height
+    
+    # Define a threshold for low resolution (e.g., less than 512x512)
+    threshold = 512 * 512
+    
+    return resolution >= threshold
+
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
+
+        # Check person image quality and restore if necessary
+        if not check_image_quality(person_image):
+            print("Low resolution person image detected. Restoring...")
+            person_image = restore_image(person_image)
 
         # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
@@ -286,7 +305,7 @@ example_garments = [
     "images/b18.png",
 ]
 
-# Pre-process and cache example garments
+# Pre-process and cache garments here (storing as map, hasnain/zohaib its important if implementing anything like inpaint or segmentation )
 with ThreadPoolExecutor(max_workers=4) as executor:
     example_garment_images = list(executor.map(lambda x: Image.open(x), example_garments))
     executor.map(process_and_cache_garment, example_garment_images)
