@@ -17,7 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
+from transformers import AutoFeatureExtractor, AutoModelForImageClassification
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -29,10 +29,11 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from sklearn.cluster import KMeans
 
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+# Load a pre-trained model for image analysis
+feature_extractor = AutoFeatureExtractor.from_pretrained("microsoft/resnet-50")
+model = AutoModelForImageClassification.from_pretrained("microsoft/resnet-50")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -66,49 +67,102 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
+def get_dominant_colors(image, n_colors=3):
+    # Reshape the image to be a list of pixels
+    pixels = image.reshape(-1, 3)
+
+    # Perform K-means clustering to find dominant colors
+    kmeans = KMeans(n_clusters=n_colors)
+    kmeans.fit(pixels)
+
+    # Get the RGB values of the dominant colors
+    dominant_colors = kmeans.cluster_centers_
+
+    # Convert to 8-bit color values
+    dominant_colors = np.uint8(dominant_colors)
+
+    return dominant_colors
+
+def rgb_to_hex(rgb):
+    return '#{:02x}{:02x}{:02x}'.format(rgb[0], rgb[1], rgb[2])
+
 def analyze_image(image):
-    # Convert numpy array to PIL Image
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    # Prepare image for CLIP
-    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
-    
+    # Resize image to a standard size
+    image = Image.fromarray(image).resize((224, 224))
+    image_array = np.array(image)
+
+    # Get dominant colors
+    dominant_colors = get_dominant_colors(image_array)
+    color_hexes = [rgb_to_hex(color) for color in dominant_colors]
+
+    # Prepare image for the model
+    inputs = feature_extractor(images=image, return_tensors="pt")
+
     # Get image features
     with torch.no_grad():
-        image_features = clip_model.get_image_features(**inputs)
-    
-    # Use CLIP to get the most relevant labels
-    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
-                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
-                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
-                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
-    
-    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
-    with torch.no_grad():
-        text_features = clip_model.get_text_features(**text_inputs)
-    
-    # Calculate similarities
-    similarities = (image_features @ text_features.T).squeeze(0)
-    
-    # Get top 5 most similar labels
-    top_5_indices = similarities.argsort(descending=True)[:5]
-    top_5_labels = [candidate_labels[i] for i in top_5_indices]
-    
-    return top_5_labels
+        outputs = model(**inputs)
+        logits = outputs.logits
+
+    # Get the predicted class
+    predicted_class_idx = logits.argmax(-1).item()
+    predicted_class = model.config.id2label[predicted_class_idx]
+
+    return color_hexes, predicted_class
+
+def estimate_size(image):
+    # This is a simplified size estimation. In a real-world scenario, you'd need more sophisticated methods.
+    height, width = image.shape[:2]
+    area = height * width
+    if area < 200000:  # threshold for small
+        return "Small (S)"
+    elif area < 400000:  # threshold for medium
+        return "Medium (M)"
+    else:
+        return "Large (L)"
+
+def estimate_body_measurements(image):
+    # This is a placeholder. In a real scenario, you'd use more advanced computer vision techniques.
+    height, width = image.shape[:2]
+    aspect_ratio = height / width
+    if aspect_ratio > 2:
+        return "Tall and Slim"
+    elif aspect_ratio < 1.5:
+        return "Short and Wide"
+    else:
+        return "Average Build"
+
+def detect_gender(image):
+    # This is a placeholder. In a real scenario, you'd use a trained model for gender detection.
+    # For now, we'll just return "Unknown" to avoid making assumptions.
+    return "Unknown"
+
+def estimate_age(image):
+    # This is a placeholder. In a real scenario, you'd use a trained model for age estimation.
+    return "Adult"  # Default to a safe assumption
+
+def detect_logo(image):
+    # This is a placeholder. In a real scenario, you'd use object detection or logo recognition models.
+    return "No logo detected"
 
 def generate_inpaint_prompt(garment_image, person_image):
-    garment_labels = analyze_image(garment_image)
-    person_labels = analyze_image(person_image)
-    
-    garment_description = ", ".join(garment_labels)
-    person_description = ", ".join(person_labels)
-    
-    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
-    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
-    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
-    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
-    
+    # Analyze garment
+    garment_colors, garment_type = analyze_image(garment_image)
+    garment_size = estimate_size(garment_image)
+    logo = detect_logo(garment_image)
+
+    # Analyze person
+    _, _ = analyze_image(person_image)  # We don't need colors for person
+    gender = detect_gender(person_image)
+    age = estimate_age(person_image)
+    body_measurements = estimate_body_measurements(person_image)
+
+    prompt = f"Garment: {garment_type}, Size: {garment_size}, Colors: {', '.join(garment_colors)}. "
+    prompt += f"Logo: {logo}. "
+    prompt += f"Person: Gender: {gender}, Age: {age}, Build: {body_measurements}. "
+    prompt += f"Dress the person in the specified garment, ensuring proper fit and style. "
+    prompt += f"Pay attention to color accuracy, garment details, and how it complements the person's body type. "
+    prompt += f"Maintain the person's pose and proportions while naturally integrating the new garment."
+
     return prompt
 
 # Function to process and cache garment image
