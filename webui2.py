@@ -121,7 +121,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Dynamic resizing
         shape_ceil = get_image_shape_ceil(person_image)
-        target_size = (shape_ceil, shape_ceil)
+        target_size = (int(shape_ceil), int(shape_ceil))  # Convert to integers
 
         clothes_image = HWC3(clothes_image)
         person_image = HWC3(person_image)
