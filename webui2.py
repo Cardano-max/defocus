@@ -95,6 +95,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         }
         print(f"Category Input: {category_input}")
         
+        # Safely get the category, defaulting to "upper_body" if not found
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
@@ -105,25 +106,19 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
         orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Calculate the aspect ratio of the person image
-        person_aspect_ratio = orig_person_h / orig_person_w
-
-        # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
-        target_height = int(target_width * person_aspect_ratio)
-
-        # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
-            target_width = int(target_height / person_aspect_ratio)
+        # Define a maximum dimension (you can adjust this)
+        max_dim = 1024
 
         # Resize images while preserving aspect ratio
-        clothes_image = resize_image(HWC3(clothes_image), target_width, target_height)
-        person_image = resize_image(HWC3(person_image), target_width, target_height)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
+        clothes_image = resize_image(HWC3(clothes_image), max_dim, max_dim)
+        person_image = resize_image(HWC3(person_image), max_dim, max_dim)
+        inpaint_mask = resize_image(HWC3(inpaint_mask), max_dim, max_dim)
 
-        # Set the aspect ratio for the model
-        aspect_ratio = f"{target_width}×{target_height}"
+        # Get the new dimensions
+        person_h, person_w = person_image.shape[:2]
+
+        # Set the aspect ratio based on the resized person image
+        aspect_ratio = f"{person_w}×{person_h}"
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -183,8 +178,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_scheduler,
             -1,
             -1,
-            target_width,
-            target_height,
+            -1,
+            -1,
             -1,
             modules.config.default_overwrite_upscale,
             False,
