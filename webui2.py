@@ -107,7 +107,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_person_h, orig_person_w = person_image.shape[:2]
 
         # Define a maximum dimension (you can adjust this)
-        max_dim = 1024
+        max_dim = 3060
 
         # Resize images while preserving aspect ratio
         clothes_image = resize_image(HWC3(clothes_image), max_dim, max_dim)
