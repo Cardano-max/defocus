@@ -123,29 +123,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
             inpaint_mask = resize_image(HWC3(inpaint_mask)[:, :, 0], int(max_dim * person_aspect), max_dim)
 
         # Get the new dimensions
-        clothes_h, clothes_w = clothes_image.shape[:2]
         person_h, person_w = person_image.shape[:2]
 
-        # Display and save the mask
-        plt.figure(figsize=(10, 10))
-        plt.imshow(inpaint_mask, cmap='gray')
-        plt.axis('off')
-        
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        buf.seek(0)
-        
-        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
-        with open(masked_image_path, 'wb') as f:
-            f.write(buf.getvalue())
-        
-        plt.close()
+        # Set the aspect ratio based on the resized person image
+        aspect_ratio = f"{person_w}*{person_h}"
 
-        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
-
-        loras = []
-        for lora in modules.config.default_loras:
-            loras.extend(lora)
+        # ... rest of the function remains the same ...
 
         args = [
             True,
@@ -154,7 +137,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            f"{person_w}*{person_h}",  # Use the resized person image dimensions for aspect ratio
+            aspect_ratio,  # Use the calculated aspect ratio
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
