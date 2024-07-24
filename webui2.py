@@ -84,11 +84,19 @@ def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Convert person_image to PIL Image
         person_pil = Image.fromarray(person_image)
-        categories = {"Upper Body": "upper_body", "Lower Body": "lower_body", "Full Body": "dresses"}
+        categories = {
+            "Upper Body": "upper_body",
+            "Lower Body": "lower_body",
+            "Full Body": "dresses"
+        }
         print("Category Input", category_input)
         
+        # Safely get the category, defaulting to "upper_body" if not found
+        category = categories.get(category_input, "upper_body")
+        print(f"Using category: {category}")
+        
         # Generate mask
-        inpaint_mask = masker.get_mask(person_pil, category=categories[category_input])
+        inpaint_mask = masker.get_mask(person_pil, category=category)
 
         # Get the original dimensions
         orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
@@ -228,7 +236,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print("Error in virtual_try_on:", str(e))
         traceback.print_exc()
         return {"success": False, "error": str(e)}
-        
+
 example_garments = [
     "images/b1.png",
     "images/b2.jpeg",
