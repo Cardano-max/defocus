@@ -82,14 +82,18 @@ def send_feedback_email(rating, comment):
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Convert person_image to PIL Image
-        person_pil = Image.fromarray(person_image)
+        # Convert person_image to PIL Image if it's not already
+        if not isinstance(person_image, Image.Image):
+            person_pil = Image.fromarray(person_image)
+        else:
+            person_pil = person_image
+
         categories = {
             "Upper Body": "upper_body",
             "Lower Body": "lower_body",
             "Full Body": "dresses"
         }
-        print("Category Input", category_input)
+        print(f"Category Input: {category_input}")
         
         # Safely get the category, defaulting to "upper_body" if not found
         category = categories.get(category_input, "upper_body")
@@ -102,25 +106,13 @@ def virtual_try_on(clothes_image, person_image, category_input):
         orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
         orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Calculate the aspect ratios
-        clothes_aspect = orig_clothes_w / orig_clothes_h
-        person_aspect = orig_person_w / orig_person_h
-
         # Define a maximum dimension (you can adjust this)
         max_dim = 1024
 
         # Resize images while preserving aspect ratio
-        if clothes_aspect > 1:  # width > height
-            clothes_image = resize_image(HWC3(clothes_image), max_dim, int(max_dim / clothes_aspect))
-        else:
-            clothes_image = resize_image(HWC3(clothes_image), int(max_dim * clothes_aspect), max_dim)
-
-        if person_aspect > 1:  # width > height
-            person_image = resize_image(HWC3(person_image), max_dim, int(max_dim / person_aspect))
-            inpaint_mask = resize_image(HWC3(inpaint_mask)[:, :, 0], max_dim, int(max_dim / person_aspect))
-        else:
-            person_image = resize_image(HWC3(person_image), int(max_dim * person_aspect), max_dim)
-            inpaint_mask = resize_image(HWC3(inpaint_mask)[:, :, 0], int(max_dim * person_aspect), max_dim)
+        clothes_image = resize_image(HWC3(clothes_image), max_dim, max_dim)
+        person_image = resize_image(HWC3(person_image), max_dim, max_dim)
+        inpaint_mask = resize_image(HWC3(inpaint_mask), max_dim, max_dim)
 
         # Get the new dimensions
         person_h, person_w = person_image.shape[:2]
@@ -128,7 +120,27 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Set the aspect ratio based on the resized person image
         aspect_ratio = f"{person_w}*{person_h}"
 
-        # ... rest of the function remains the same ...
+        # Display and save the mask
+        plt.figure(figsize=(10, 10))
+        plt.imshow(inpaint_mask, cmap='gray')
+        plt.axis('off')
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        buf.seek(0)
+        
+        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
+        with open(masked_image_path, 'wb') as f:
+            f.write(buf.getvalue())
+        
+        plt.close()
+
+        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
+
+        # Define loras here
+        loras = []
+        for lora in modules.config.default_loras:
+            loras.extend(lora)
 
         args = [
             True,
@@ -137,7 +149,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            aspect_ratio,  # Use the calculated aspect ratio
+            aspect_ratio,
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
@@ -216,10 +228,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
             return {"success": False, "error": "No results generated"}
 
     except Exception as e:
-        print("Error in virtual_try_on:", str(e))
+        print(f"Error in virtual_try_on: {str(e)}")
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
+        
 example_garments = [
     "images/b1.png",
     "images/b2.jpeg",
