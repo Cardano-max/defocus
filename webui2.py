@@ -25,6 +25,7 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from Masking.masking import Masking
 
 
 def image_to_base64(img_path):
@@ -46,9 +47,8 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
-# Initialize Segformer model and processor
-processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
-model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
+# Initialize Masker
+masker = Masking()
 
 # Initialize queue and locks
 task_queue = Queue()
@@ -79,46 +79,18 @@ def send_feedback_email(rating, comment):
         return False
 
 
-def generate_mask(image):
-    inputs = processor(images=image, return_tensors="pt")
-    outputs = model(**inputs)
-    logits = outputs.logits.cpu()
 
-    upsampled_logits = torch.nn.functional.interpolate(
-        logits,
-        size=image.size[::-1],
-        mode="bilinear",
-        align_corners=False,
-    )
-
-    pred_seg = upsampled_logits.argmax(dim=1)[0]
-    labels = [4, 14, 15, 6, 12, 13]  # Upper Clothes 4, Left Arm 14, Right Arm 15
-
-    combined_mask = torch.zeros_like(pred_seg, dtype=torch.bool)
-    for label in labels:
-        combined_mask = torch.logical_or(combined_mask, pred_seg == label)
-
-    pred_seg_new = torch.zeros_like(pred_seg)
-    pred_seg_new[combined_mask] = 255
-
-    image_mask = pred_seg_new.numpy().astype(np.uint8)
-
-    kernel_size = 50
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    dilated_mask = cv2.dilate(image_mask, kernel, iterations=1)
-
-    return dilated_mask
-
-def virtual_try_on(clothes_image, person_image):
+def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Convert person_image to PIL Image
         person_pil = Image.fromarray(person_image)
-
+        categories = {"Upper Body": "upper_body", "Lower Body": "lower_body", "Full Body": "dresses"}
+        print("Category Input",category_input)
         # Generate mask
-        inpaint_mask = generate_mask(person_pil)
+        inpaint_mask = masker.get_mask(person_pil, category=categories[category_input])
 
         # Resize images and mask
-        target_size = (1024, 1024)
+        target_size = (1152, 896)
         clothes_image = HWC3(clothes_image)
         person_image = HWC3(person_image)
         inpaint_mask = HWC3(inpaint_mask)[:, :, 0]
@@ -551,10 +523,10 @@ def process_queue():
         task = task_queue.get()
         if task is None:
             break
-        clothes_image, person_image, result_callback = task
+        clothes_image, person_image, category_input, result_callback = task
         current_task_event.set()
         queue_update_event.set()
-        result = virtual_try_on(clothes_image, person_image)
+        result = virtual_try_on(clothes_image, person_image, category_input)
         current_task_event.clear()
         result_callback(result)
         task_queue.task_done()
@@ -583,6 +555,14 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         with gr.Column(scale=3):
             gr.Markdown("### Step 2: Upload Your Photo")
             person_input = gr.Image(label="Your Photo", source="upload", type="numpy")
+        
+        with gr.Column(scale=3):
+            # Radio buttons for category selection
+            category_input = gr.Radio(
+                choices=["Upper Body", "Lower Body", "Full Body"],
+                label="Select a Category",
+                value="Upper"  # Default value
+                )
 
     gr.HTML(f"""
         <div class="instruction-images">
@@ -630,7 +610,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image):
+    def process_virtual_try_on(clothes_image, person_image, category_input):
         if clothes_image is None or person_image is None:
             yield {
                 loading_indicator: gr.update(visible=False),
@@ -662,7 +642,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
         with queue_lock:
             current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, result_callback))
+            task_queue.put((clothes_image, person_image, category_input, result_callback))
 
         generation_done = False
         generation_result = None
@@ -758,7 +738,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     try_on_button.click(
         process_virtual_try_on,
-        inputs=[clothes_input, person_input],
+        inputs=[clothes_input, person_input, category_input],
         outputs=[loading_indicator, status_info, masked_output, try_on_output, image_link, error_output, queue_note, feedback_row]
     )
 
