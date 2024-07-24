@@ -85,19 +85,38 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Convert person_image to PIL Image
         person_pil = Image.fromarray(person_image)
         categories = {"Upper Body": "upper_body", "Lower Body": "lower_body", "Full Body": "dresses"}
-        print("Category Input",category_input)
+        print("Category Input", category_input)
+        
         # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=categories[category_input])
 
-        # Resize images and mask
-        target_size = (1152, 896)
-        clothes_image = HWC3(clothes_image)
-        person_image = HWC3(person_image)
-        inpaint_mask = HWC3(inpaint_mask)[:, :, 0]
+        # Get the original dimensions
+        orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
+        orig_person_h, orig_person_w = person_image.shape[:2]
 
-        clothes_image = resize_image(clothes_image, target_size[0], target_size[1])
-        person_image = resize_image(person_image, target_size[0], target_size[1])
-        inpaint_mask = resize_image(inpaint_mask, target_size[0], target_size[1])
+        # Calculate the aspect ratios
+        clothes_aspect = orig_clothes_w / orig_clothes_h
+        person_aspect = orig_person_w / orig_person_h
+
+        # Define a maximum dimension (you can adjust this)
+        max_dim = 1024
+
+        # Resize images while preserving aspect ratio
+        if clothes_aspect > 1:  # width > height
+            clothes_image = resize_image(HWC3(clothes_image), max_dim, int(max_dim / clothes_aspect))
+        else:
+            clothes_image = resize_image(HWC3(clothes_image), int(max_dim * clothes_aspect), max_dim)
+
+        if person_aspect > 1:  # width > height
+            person_image = resize_image(HWC3(person_image), max_dim, int(max_dim / person_aspect))
+            inpaint_mask = resize_image(HWC3(inpaint_mask)[:, :, 0], max_dim, int(max_dim / person_aspect))
+        else:
+            person_image = resize_image(HWC3(person_image), int(max_dim * person_aspect), max_dim)
+            inpaint_mask = resize_image(HWC3(inpaint_mask)[:, :, 0], int(max_dim * person_aspect), max_dim)
+
+        # Get the new dimensions
+        clothes_h, clothes_w = clothes_image.shape[:2]
+        person_h, person_w = person_image.shape[:2]
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -127,7 +146,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            modules.config.default_aspect_ratio,
+            f"{person_w}*{person_h}",  # Use the resized person image dimensions for aspect ratio
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
@@ -209,7 +228,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print("Error in virtual_try_on:", str(e))
         traceback.print_exc()
         return {"success": False, "error": str(e)}
-
+        
 example_garments = [
     "images/b1.png",
     "images/b2.jpeg",
