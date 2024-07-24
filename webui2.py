@@ -17,7 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import AutoFeatureExtractor, AutoModelForImageClassification
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -27,13 +27,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
+
+# Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from sklearn.cluster import KMeans
-
-# Load a pre-trained model for image analysis
-feature_extractor = AutoFeatureExtractor.from_pretrained("microsoft/resnet-50")
-model = AutoModelForImageClassification.from_pretrained("microsoft/resnet-50")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -66,104 +63,6 @@ queue_update_event = Event()
 # Garment cache
 garment_cache = {}
 garment_cache_lock = Lock()
-
-def get_dominant_colors(image, n_colors=3):
-    # Reshape the image to be a list of pixels
-    pixels = image.reshape(-1, 3)
-
-    # Perform K-means clustering to find dominant colors
-    kmeans = KMeans(n_clusters=n_colors)
-    kmeans.fit(pixels)
-
-    # Get the RGB values of the dominant colors
-    dominant_colors = kmeans.cluster_centers_
-
-    # Convert to 8-bit color values
-    dominant_colors = np.uint8(dominant_colors)
-
-    return dominant_colors
-
-def rgb_to_hex(rgb):
-    return '#{:02x}{:02x}{:02x}'.format(rgb[0], rgb[1], rgb[2])
-
-def analyze_image(image):
-    # Resize image to a standard size
-    image = Image.fromarray(image).resize((224, 224))
-    image_array = np.array(image)
-
-    # Get dominant colors
-    dominant_colors = get_dominant_colors(image_array)
-    color_hexes = [rgb_to_hex(color) for color in dominant_colors]
-
-    # Prepare image for the model
-    inputs = feature_extractor(images=image, return_tensors="pt")
-
-    # Get image features
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-
-    # Get the predicted class
-    predicted_class_idx = logits.argmax(-1).item()
-    predicted_class = model.config.id2label[predicted_class_idx]
-
-    return color_hexes, predicted_class
-
-def estimate_size(image):
-    # This is a simplified size estimation. In a real-world scenario, you'd need more sophisticated methods.
-    height, width = image.shape[:2]
-    area = height * width
-    if area < 200000:  # threshold for small
-        return "Small (S)"
-    elif area < 400000:  # threshold for medium
-        return "Medium (M)"
-    else:
-        return "Large (L)"
-
-def estimate_body_measurements(image):
-    # This is a placeholder. In a real scenario, you'd use more advanced computer vision techniques.
-    height, width = image.shape[:2]
-    aspect_ratio = height / width
-    if aspect_ratio > 2:
-        return "Tall and Slim"
-    elif aspect_ratio < 1.5:
-        return "Short and Wide"
-    else:
-        return "Average Build"
-
-def detect_gender(image):
-    # This is a placeholder. In a real scenario, you'd use a trained model for gender detection.
-    # For now, we'll just return "Unknown" to avoid making assumptions.
-    return "Unknown"
-
-def estimate_age(image):
-    # This is a placeholder. In a real scenario, you'd use a trained model for age estimation.
-    return "Adult"  # Default to a safe assumption
-
-def detect_logo(image):
-    # This is a placeholder. In a real scenario, you'd use object detection or logo recognition models.
-    return "No logo detected"
-
-def generate_inpaint_prompt(garment_image, person_image):
-    # Analyze garment
-    garment_colors, garment_type = analyze_image(garment_image)
-    garment_size = estimate_size(garment_image)
-    logo = detect_logo(garment_image)
-
-    # Analyze person
-    _, _ = analyze_image(person_image)  # We don't need colors for person
-    gender = detect_gender(person_image)
-    age = estimate_age(person_image)
-    body_measurements = estimate_body_measurements(person_image)
-
-    prompt = f"Garment: {garment_type}, Size: {garment_size}, Colors: {', '.join(garment_colors)}. "
-    prompt += f"Logo: {logo}. "
-    prompt += f"Person: Gender: {gender}, Age: {age}, Build: {body_measurements}. "
-    prompt += f"Dress the person in the specified garment, ensuring proper fit and style. "
-    prompt += f"Pay attention to color accuracy, garment details, and how it complements the person's body type. "
-    prompt += f"Maintain the person's pose and proportions while naturally integrating the new garment."
-
-    return prompt
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -290,10 +189,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Generate dynamic inpaint prompt
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
-
         # Define loras here
         loras = []
         for lora in modules.config.default_loras:
@@ -322,7 +217,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            inpaint_prompt,  # Use the dynamically generated prompt
+            "Wearing a new garment",
             inpaint_mask,
             True,
             True,
