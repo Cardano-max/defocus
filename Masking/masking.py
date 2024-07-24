@@ -3,6 +3,7 @@ import cv2
 from PIL import Image, ImageDraw
 from functools import wraps
 from time import time
+import numpy as np
 
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
@@ -30,6 +31,7 @@ class Masking:
         model_parse, _ = self.parsing_model(img.resize((384,512)))
         mask, mask_gray = self.get_mask_location('hd', category, model_parse, keypoints)
         mask = mask.resize((img.width,img.height))
+        mask = np.asarray(mask, dtype=np.uint8)
         return mask
 
     @staticmethod
