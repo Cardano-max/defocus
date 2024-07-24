@@ -9,7 +9,7 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, resize_image
+from modules.util import HWC3, resize_image, get_image_shape_ceil, set_image_shape_ceil
 from modules.private_logger import get_current_html_path
 import json
 import torch
@@ -25,7 +25,7 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-
+from Masking.masking import Masking
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -46,9 +46,8 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
-# Initialize Segformer model and processor
-processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
-model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
+# Initialize Masker
+masker = Masking()
 
 # Initialize queue and locks
 task_queue = Queue()
@@ -109,16 +108,20 @@ def generate_mask(image):
 
     return dilated_mask
 
-def virtual_try_on(clothes_image, person_image):
+def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Convert person_image to PIL Image
         person_pil = Image.fromarray(person_image)
+        categories = {"Upper Body": "upper_body", "Lower Body": "lower_body", "Full Body": "dresses"}
+        print("Category Input", category_input)
 
         # Generate mask
-        inpaint_mask = generate_mask(person_pil)
+        inpaint_mask = masker.get_mask(person_pil, category=categories[category_input])
 
-        # Resize images and mask
-        target_size = (1024, 1024)
+        # Dynamic resizing
+        shape_ceil = get_image_shape_ceil(person_image)
+        target_size = (shape_ceil, shape_ceil)
+
         clothes_image = HWC3(clothes_image)
         person_image = HWC3(person_image)
         inpaint_mask = HWC3(inpaint_mask)[:, :, 0]
@@ -155,7 +158,7 @@ def virtual_try_on(clothes_image, person_image):
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
-            modules.config.default_aspect_ratio,
+            f"{target_size[0]}*{target_size[1]}",  # Dynamic aspect ratio
             1,
             modules.config.default_output_format,
             random.randint(constants.MIN_SEED, constants.MAX_SEED),
@@ -630,7 +633,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
     example_garment_gallery.select(select_example_garment, None, clothes_input)
 
-    def process_virtual_try_on(clothes_image, person_image):
+    def process_virtual_try_on(clothes_image, person_image, category_input):
         if clothes_image is None or person_image is None:
             yield {
                 loading_indicator: gr.update(visible=False),
@@ -662,7 +665,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
 
         with queue_lock:
             current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, result_callback))
+            task_queue.put((clothes_image, person_image, category_input, result_callback))
 
         generation_done = False
         generation_result = None
