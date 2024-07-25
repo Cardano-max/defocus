@@ -298,7 +298,6 @@ example_garments = [
     "images/b13.png",
     "images/b14.jpg",
     "images/b15.png",
-    "images/b16.png",
     "images/b17.png",
     "images/b18.png",
     "images/t0.png",
