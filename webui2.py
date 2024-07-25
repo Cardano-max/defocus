@@ -9,7 +9,7 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, generate_temp_filename
+from modules.util import HWC3, resize_image, generate_temp_filename
 from modules.private_logger import get_current_html_path, log
 import json
 import torch
@@ -17,6 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -26,7 +27,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
-import math
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
@@ -74,7 +74,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = garment_image  # No resizing, keep original dimensions
+    processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
@@ -116,46 +116,6 @@ def check_image_quality(image):
     
     return resolution >= threshold
 
-def find_closest_sdxl_resolution(width, height):
-    sdxl_resolutions = [
-        (1024, 1024), (1152, 896), (896, 1152), (1216, 832), (832, 1216),
-        (1344, 768), (768, 1344), (1536, 640), (640, 1536)
-    ]
-    
-    aspect_ratio = width / height
-    min_diff = float('inf')
-    closest_res = None
-    
-    for w, h in sdxl_resolutions:
-        sdxl_ratio = w / h
-        diff = abs(aspect_ratio - sdxl_ratio)
-        if diff < min_diff:
-            min_diff = diff
-            closest_res = (w, h)
-    
-    return closest_res
-
-def scale_to_sdxl_resolution(image, mask):
-    orig_width, orig_height = image.shape[1], image.shape[0]
-    sdxl_width, sdxl_height = find_closest_sdxl_resolution(orig_width, orig_height)
-    
-    # Calculate scaling factor
-    scale = min(sdxl_width / orig_width, sdxl_height / orig_height)
-    
-    new_width = int(orig_width * scale)
-    new_height = int(orig_height * scale)
-    
-    # Ensure dimensions are multiples of 8
-    new_width = (new_width // 8) * 8
-    new_height = (new_height // 8) * 8
-    
-    # Only resize if necessary
-    if (new_width, new_height) != (orig_width, orig_height):
-        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        mask = cv2.resize(mask, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
-    
-    return image, mask, f"{new_width}×{new_height}"
-
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Process and cache the garment image
@@ -190,12 +150,27 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        # Convert PIL images to numpy arrays if necessary
-        person_image = np.array(person_pil)
-        inpaint_mask = np.array(inpaint_mask)
+        # Get the original dimensions
+        orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Scale to nearest SDXL resolution if necessary
-        person_image, inpaint_mask, aspect_ratio = scale_to_sdxl_resolution(person_image, inpaint_mask)
+        # Calculate the aspect ratio of the person image
+        person_aspect_ratio = orig_person_h / orig_person_w
+
+        # Set target width and calculate corresponding height to maintain aspect ratio
+        target_width = 1024
+        target_height = int(target_width * person_aspect_ratio)
+
+        # Ensure target height is also 1024 at maximum
+        if target_height > 1024:
+            target_height = 1024
+            target_width = int(target_height / person_aspect_ratio)
+
+        # Resize images while preserving aspect ratio
+        person_image = resize_image(HWC3(person_image), target_width, target_height)
+        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
+
+        # Set the aspect ratio for the model
+        aspect_ratio = f"{target_width}×{target_height}"
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -255,8 +230,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_scheduler,
             -1,
             -1,
-            -1,  # overwrite_width
-            -1,  # overwrite_height
+            target_width,
+            target_height,
             -1,
             modules.config.default_overwrite_upscale,
             False,
