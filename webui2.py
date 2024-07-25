@@ -9,7 +9,7 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, resize_image, generate_temp_filename
+from modules.util import HWC3, generate_temp_filename
 from modules.private_logger import get_current_html_path, log
 import json
 import torch
@@ -17,7 +17,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -27,37 +26,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
+import math
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-
-import numpy as np
-
-def get_image_shape_ceil(x):
-    """
-    Returns the shape of the image rounded up to the nearest multiple of 8.
-    """
-    try:
-        return ((x.shape[0] + 7) // 8) * 8, ((x.shape[1] + 7) // 8) * 8
-    except:
-        return (1024, 1024)
-
-def set_image_shape_ceil(x, shape_ceil):
-    """
-    Resizes the image to the given shape, rounding up to the nearest multiple of 8.
-    """
-    if x.shape[0:2] != shape_ceil:
-        return resize_image(x, shape_ceil[0], shape_ceil[1])
-    return x
-
-def resize_image(im, width, height):
-    """
-    Resizes the image to the given width and height.
-    """
-    im = Image.fromarray(im)
-    im = im.resize((width, height), Image.LANCZOS)
-    return np.array(im)
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -101,7 +74,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
+    processed_garment = garment_image  # No resizing, keep original dimensions
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
@@ -143,6 +116,46 @@ def check_image_quality(image):
     
     return resolution >= threshold
 
+def find_closest_sdxl_resolution(width, height):
+    sdxl_resolutions = [
+        (1024, 1024), (1152, 896), (896, 1152), (1216, 832), (832, 1216),
+        (1344, 768), (768, 1344), (1536, 640), (640, 1536)
+    ]
+    
+    aspect_ratio = width / height
+    min_diff = float('inf')
+    closest_res = None
+    
+    for w, h in sdxl_resolutions:
+        sdxl_ratio = w / h
+        diff = abs(aspect_ratio - sdxl_ratio)
+        if diff < min_diff:
+            min_diff = diff
+            closest_res = (w, h)
+    
+    return closest_res
+
+def scale_to_sdxl_resolution(image, mask):
+    orig_width, orig_height = image.shape[1], image.shape[0]
+    sdxl_width, sdxl_height = find_closest_sdxl_resolution(orig_width, orig_height)
+    
+    # Calculate scaling factor
+    scale = min(sdxl_width / orig_width, sdxl_height / orig_height)
+    
+    new_width = int(orig_width * scale)
+    new_height = int(orig_height * scale)
+    
+    # Ensure dimensions are multiples of 8
+    new_width = (new_width // 8) * 8
+    new_height = (new_height // 8) * 8
+    
+    # Only resize if necessary
+    if (new_width, new_height) != (orig_width, orig_height):
+        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        mask = cv2.resize(mask, (new_width, new_height), interpolation=cv2.INTER_NEAREST)
+    
+    return image, mask, f"{new_width}×{new_height}"
+
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Process and cache the garment image
@@ -177,28 +190,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        # Get the original dimensions
-        orig_person_h, orig_person_w = person_image.shape[:2]
+        # Convert PIL images to numpy arrays if necessary
+        person_image = np.array(person_pil)
+        inpaint_mask = np.array(inpaint_mask)
 
-        # Calculate the shape ceiling
-        shape_ceil = get_image_shape_ceil(person_image)
-        if max(shape_ceil) < 1024:
-            print(f'[Vary] Image is resized because it is too small.')
-            shape_ceil = (1024, 1024)
-        elif max(shape_ceil) > 2048:
-            print(f'[Vary] Image is resized because it is too big.')
-            shape_ceil = (2048, 2048)
-
-        # Resize images while preserving aspect ratio
-        person_image = set_image_shape_ceil(person_image, shape_ceil)
-        inpaint_mask = set_image_shape_ceil(inpaint_mask, shape_ceil)
-
-        # Get the new dimensions after resizing
-        new_h, new_w = person_image.shape[:2]
-
-        # Set the aspect ratio for the model
-        aspect_ratio = f"{new_w}×{new_h}"
-
+        # Scale to nearest SDXL resolution if necessary
+        person_image, inpaint_mask, aspect_ratio = scale_to_sdxl_resolution(person_image, inpaint_mask)
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
