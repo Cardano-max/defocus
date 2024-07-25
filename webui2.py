@@ -9,7 +9,7 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, resize_image, generate_temp_filename
+from modules.util import HWC3, resize_image, generate_temp_filename, get_image_shape_ceil, set_image_shape_ceil
 from modules.private_logger import get_current_html_path, log
 import json
 import torch
@@ -27,6 +27,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
+from modules.upscaler import perform_upscale
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
@@ -169,12 +170,19 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
+        # Upscale the person image to match the target dimensions
+        shape_ceil = get_image_shape_ceil(person_image)
+        upscaled_person = set_image_shape_ceil(person_image, shape_ceil)
+
+        # Upscale the mask to match the upscaled person image
+        upscaled_mask = set_image_shape_ceil(inpaint_mask, shape_ceil)
+
         # Set the aspect ratio for the model
-        aspect_ratio = f"{target_width}×{target_height}"
+        aspect_ratio = f"{upscaled_person.shape[1]}×{upscaled_person.shape[0]}"
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
-        plt.imshow(inpaint_mask, cmap='gray')
+        plt.imshow(upscaled_mask, cmap='gray')
         plt.axis('off')
         
         buf = io.BytesIO()
@@ -216,9 +224,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
             flags.disabled,
             None,
             [],
-            {'image': person_image, 'mask': inpaint_mask},
+            {'image': upscaled_person, 'mask': upscaled_mask},
             "Wearing a new garment",
-            inpaint_mask,
+            upscaled_mask,
             True,
             True,
             modules.config.default_black_out_nsfw,
@@ -230,8 +238,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_scheduler,
             -1,
             -1,
-            target_width,
-            target_height,
+            upscaled_person.shape[1],
+            upscaled_person.shape[0],
             -1,
             modules.config.default_overwrite_upscale,
             False,
@@ -313,8 +321,9 @@ example_garments = [
     "images/l20.png",
     "images/l4.png",
     "images/l5.png",
-    "images/l6.png",
     "images/l7.png",
+    "images/l8.png",
+
 ]
 
 # Pre-process and cache garments here (storing as map, hasnain/zohaib its important if implementing anything like inpaint or segmentation )
