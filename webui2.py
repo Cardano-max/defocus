@@ -1,4 +1,3 @@
-Copyimport gradio as gr
 import random
 import time
 import traceback
