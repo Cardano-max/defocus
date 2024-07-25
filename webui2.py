@@ -303,6 +303,15 @@ example_garments = [
     "images/b16.png",
     "images/b17.png",
     "images/b18.png",
+    "images/t0.png",
+    "images/1.png",
+    "images/t2.png",
+    "images/t3.png",
+    "images/t4.png",
+    "images/t5.png",
+    "images/t6.png",
+    "images/t7.png",
+    "images/t16.png",
 ]
 
 # Pre-process and cache garments here (storing as map, hasnain/zohaib its important if implementing anything like inpaint or segmentation )
