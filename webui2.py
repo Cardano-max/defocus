@@ -32,6 +32,33 @@ from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
+import numpy as np
+
+def get_image_shape_ceil(x):
+    """
+    Returns the shape of the image rounded up to the nearest multiple of 8.
+    """
+    try:
+        return ((x.shape[0] + 7) // 8) * 8, ((x.shape[1] + 7) // 8) * 8
+    except:
+        return (1024, 1024)
+
+def set_image_shape_ceil(x, shape_ceil):
+    """
+    Resizes the image to the given shape, rounding up to the nearest multiple of 8.
+    """
+    if x.shape[0:2] != shape_ceil:
+        return resize_image(x, shape_ceil[0], shape_ceil[1])
+    return x
+
+def resize_image(im, width, height):
+    """
+    Resizes the image to the given width and height.
+    """
+    im = Image.fromarray(im)
+    im = im.resize((width, height), Image.LANCZOS)
+    return np.array(im)
+
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
@@ -153,31 +180,25 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
 
-        # Calculate the aspect ratio of the person image
-        person_aspect_ratio = orig_person_h / orig_person_w
-
+        # Calculate the shape ceiling
         shape_ceil = get_image_shape_ceil(person_image)
-        if shape_ceil < 1024:
+        if max(shape_ceil) < 1024:
             print(f'[Vary] Image is resized because it is too small.')
-            shape_ceil = 1024
-        elif shape_ceil > 2048:
+            shape_ceil = (1024, 1024)
+        elif max(shape_ceil) > 2048:
             print(f'[Vary] Image is resized because it is too big.')
-            shape_ceil = 2048
+            shape_ceil = (2048, 2048)
 
+        # Resize images while preserving aspect ratio
         person_image = set_image_shape_ceil(person_image, shape_ceil)
         inpaint_mask = set_image_shape_ceil(inpaint_mask, shape_ceil)
 
-        # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
-            target_width = int(target_height / person_aspect_ratio)
-
-        # Resize images while preserving aspect ratio
-        person_image = resize_image(HWC3(person_image), target_width, target_height)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
+        # Get the new dimensions after resizing
+        new_h, new_w = person_image.shape[:2]
 
         # Set the aspect ratio for the model
-        aspect_ratio = f"{target_width}×{target_height}"
+        aspect_ratio = f"{new_w}×{new_h}"
+
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
