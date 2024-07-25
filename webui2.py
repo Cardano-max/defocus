@@ -156,9 +156,16 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
 
-        # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
-        target_height = int(target_width * person_aspect_ratio)
+        shape_ceil = get_image_shape_ceil(person_image)
+        if shape_ceil < 1024:
+            print(f'[Vary] Image is resized because it is too small.')
+            shape_ceil = 1024
+        elif shape_ceil > 2048:
+            print(f'[Vary] Image is resized because it is too big.')
+            shape_ceil = 2048
+
+        person_image = set_image_shape_ceil(person_image, shape_ceil)
+        inpaint_mask = set_image_shape_ceil(inpaint_mask, shape_ceil)
 
         # Ensure target height is also 1024 at maximum
         if target_height > 1024:
@@ -230,8 +237,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_scheduler,
             -1,
             -1,
-            target_width,
-            target_height,
+            -1,  # overwrite_width
+            -1,  # overwrite_height
             -1,
             modules.config.default_overwrite_upscale,
             False,
