@@ -16,6 +16,7 @@ import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
+import math
 import cv2
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
