@@ -17,6 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -26,16 +27,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
-
-# ControlNet imports
-from annotator.util import resize_image, HWC3
-from annotator.canny import CannyDetector
-from annotator.hed import HEDdetector
-from annotator.midas import MidasDetector
-from annotator.mlsd import MLSDdetector
-from annotator.openpose import OpenposeDetector
-from annotator.uniformer import UniformerDetector
-from controlnet_aux import HEDdetector, MidasDetector, MLSDdetector, OpenposeDetector, PidiNetDetector, NormalBaeDetector, LineartDetector, LineartAnimeDetector, CannyDetector, ContentShuffleDetector, ZoeDetector, MediapipeFaceDetector, SamDetector, LeresDetector
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
@@ -73,22 +64,16 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-# Initialize ControlNet processors
-canny_detector = CannyDetector()
-hed_detector = HEDdetector()
-midas_detector = MidasDetector()
-mlsd_detector = MLSDdetector()
-openpose_detector = OpenposeDetector()
-uniformer_detector = UniformerDetector()
-
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
+    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
+    # Processing the garment image (resize, etc.)
     processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
@@ -99,7 +84,7 @@ def process_and_cache_garment(garment_image):
 # Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"
+    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -110,7 +95,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:
+        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -119,48 +104,35 @@ def send_feedback_email(rating, comment):
         return False
 
 def check_image_quality(image):
+    # Convert to PIL Image if it's a numpy array
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
     width, height = image.size
     resolution = width * height
     
+    # Define a threshold for low resolution (e.g., less than 512x512)
     threshold = 512 * 512
     
     return resolution >= threshold
 
-def generate_controlnet_conditioning(image, control_type):
-    image = HWC3(image)
-    if control_type == "canny":
-        return canny_detector(image)
-    elif control_type == "hed":
-        return hed_detector(image)
-    elif control_type == "depth":
-        return midas_detector(image)
-    elif control_type == "normal":
-        return normal_bae_detector(image)
-    elif control_type == "mlsd":
-        return mlsd_detector(image)
-    elif control_type == "openpose":
-        return openpose_detector(image)
-    elif control_type == "seg":
-        return uniformer_detector(image)
-    else:
-        raise ValueError(f"Unsupported control type: {control_type}")
-
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
+        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
+        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
+        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
+        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
@@ -199,11 +171,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
-
-        # Generate ControlNet conditionings
-        canny_cond = generate_controlnet_conditioning(person_image, "canny")
-        depth_cond = generate_controlnet_conditioning(person_image, "depth")
-        hed_cond = generate_controlnet_conditioning(person_image, "hed")
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -292,14 +259,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_metadata_scheme,
         ]
 
-        # Add ControlNet arguments
         args.extend([
             processed_clothes,
             0.86,
             0.97,
             flags.default_ip,
         ])
-        args.extend([canny_cond, depth_cond, hed_cond])
 
         task = worker.AsyncTask(args=args)
         worker.async_tasks.append(task)
