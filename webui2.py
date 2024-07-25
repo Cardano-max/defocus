@@ -17,8 +17,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
-from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
 import base64
@@ -66,14 +64,12 @@ garment_cache_lock = Lock()
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
-    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
-    # Processing the garment image (resize, etc.)
     processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
@@ -81,10 +77,9 @@ def process_and_cache_garment(garment_image):
     
     return processed_garment
 
-# Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
+    receiver_email = "feedback@arbitryon.com"
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -95,7 +90,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
+        with smtplib.SMTP("localhost", 1025) as server:
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -104,35 +99,29 @@ def send_feedback_email(rating, comment):
         return False
 
 def check_image_quality(image):
-    # Convert to PIL Image if it's a numpy array
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
     width, height = image.size
     resolution = width * height
     
-    # Define a threshold for low resolution (e.g., less than 512x512)
     threshold = 512 * 512
     
     return resolution >= threshold
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
-        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
-        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
-        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
@@ -147,32 +136,22 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
-        # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
-
-        # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
-
-        # Set target width and calculate corresponding height to maintain aspect ratio
         target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
-        # Ensure target height is also 1024 at maximum
         if target_height > 1024:
             target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
-        # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
-        # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
-        # Display and save the mask
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -189,7 +168,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
@@ -200,7 +178,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
-            Performance.QUALITY.value,
+            flags.Performance.QUALITY.value,
             aspect_ratio,
             1,
             modules.config.default_output_format,
@@ -283,52 +261,22 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print(f"Error in virtual_try_on: {str(e)}")
         traceback.print_exc()
         return {"success": False, "error": str(e)}
-        
+
 example_garments = [
-    "images/b2.jpeg",
-    "images/b4.jpeg",
-    "images/b5.jpeg",
-    "images/b6.jpeg",
-    "images/b7.png",
-    "images/b8.png",
-    "images/b9.png",
-    "images/b10.png",
-    "images/b11.png",
-    "images/b12.png",
-    "images/b13.png",
-    "images/b14.jpg",
-    "images/b15.png",
-    "images/b17.png",
-    "images/b18.png",
-    "images/t0.png",
-    "images/1.png",
-    "images/t2.png",
-    "images/t3.png",
-    "images/t4.png",
-    "images/t5.png",
-    "images/t6.png",
-    "images/t7.png",
-    "images/t16.png",
-    "images/l19.png",
-    "images/l20.png",
-    "images/l3.png",
-    "images/l4.png",
-    "images/l5.png",
-    "images/l7.png",
-    "images/l8.png",
-    "images/nine.jpeg",
-    "images/l9.png",
-
-
-
+    "images/b2.jpeg", "images/b4.jpeg", "images/b5.jpeg", "images/b6.jpeg",
+    "images/b7.png", "images/b8.png", "images/b9.png", "images/b10.png",
+    "images/b11.png", "images/b12.png", "images/b13.png", "images/b14.jpg",
+    "images/b15.png", "images/b17.png", "images/b18.png", "images/t0.png",
+    "images/1.png", "images/t2.png", "images/t3.png", "images/t4.png",
+    "images/t5.png", "images/t6.png", "images/t7.png", "images/t16.png",
+    "images/l19.png", "images/l20.png", "images/l4.png", "images/l5.png",
+    "images/l7.png", "images/l8.png", "images/nine.jpeg"
 ]
 
-# Pre-process and cache garments here (storing as map, hasnain/zohaib its important if implementing anything like inpaint or segmentation )
 with ThreadPoolExecutor(max_workers=4) as executor:
     example_garment_images = list(executor.map(lambda x: Image.open(x), example_garments))
     executor.map(process_and_cache_garment, example_garment_images)
 
-# Subtle loading messages
 loading_messages = [
     "Preparing your virtual fitting room...",
     "Analyzing fashion possibilities...",
@@ -337,7 +285,6 @@ loading_messages = [
     "Initiating virtual try-on sequence...",
 ]
 
-# Gentle error messages
 error_messages = [
     "Oops! We've hit a small snag. Our team is on it!",
     "It seems our digital tailor needs a quick coffee break. We'll be right back!",
@@ -346,274 +293,142 @@ error_messages = [
     "Our virtual dressing room is temporarily out of order. We're fixing it up!",
 ]
 
-
 css = """
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Roboto:wght@300;400;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
 
     body, .gradio-container {
-        background-color: #000810;
-        color: #e0fbfc;
-        font-family: 'Roboto', sans-serif;
-        background-image: 
-            radial-gradient(circle at 10% 20%, rgba(6, 190, 225, 0.05) 0%, transparent 20%),
-            radial-gradient(circle at 90% 80%, rgba(255, 83, 168, 0.05) 0%, transparent 20%);
-        background-attachment: fixed;
+        font-family: 'Poppins', sans-serif;
+        background-color: #f0f4f8;
+        color: #333;
+    }
+
+    .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 2rem;
     }
 
     .header {
-        background: linear-gradient(135deg, #0a192f 0%, #0e2b50 100%);
-        padding: 40px;
-        border-radius: 20px;
-        margin-bottom: 40px;
-        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3), 
-                    0 0 0 1px rgba(255, 255, 255, 0.1) inset;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: linear-gradient(
-            to bottom right,
-            rgba(255, 255, 255, 0.1) 0%,
-            rgba(255, 255, 255, 0.05) 40%,
-            rgba(255, 255, 255, 0) 50%
-        );
-        transform: rotate(-45deg);
-        pointer-events: none;
+        background: linear-gradient(135deg, #6e8efb, #a777e3);
+        color: white;
+        padding: 2rem 0;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 2rem;
     }
 
     .title {
-        font-family: 'Orbitron', sans-serif;
-        font-size: 48px;
-        font-weight: 700;
-        color: #ffffff;
-        margin-bottom: 20px;
-        text-transform: uppercase;
-        letter-spacing: 3px;
-        text-shadow: 0 0 10px rgba(6, 190, 225, 0.5);
+        font-size: 2.5rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
     }
 
     .subtitle {
-        font-size: 22px;
-        color: #98c1d9;
+        font-size: 1.2rem;
         font-weight: 300;
-        letter-spacing: 1px;
     }
 
-    .example-garments img {
-        border-radius: 15px;
-        transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
-        border: 2px solid transparent;
+    .main-content {
+        display: flex;
+        gap: 2rem;
+        margin-bottom: 2rem;
     }
 
-    .example-garments img:hover {
-        transform: translateY(-10px) scale(1.05);
-        box-shadow: 0 20px 40px rgba(6, 190, 225, 0.3);
-        border-color: #06bee1;
+    .section {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     }
 
-    .try-on-button {
-        background: linear-gradient(135deg, #06bee1 0%, #0030ff 100%);
-        color: white;
-        padding: 18px 36px;
-        border: none;
-        border-radius: 50px;
-        font-family: 'Orbitron', sans-serif;
-        font-size: 20px;
+    .section-title {
+        font-size: 1.2rem;
         font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        position: relative;
-        overflow: hidden;
+        margin-bottom: 1rem;
+        color: #4a4a4a;
     }
 
-    .try-on-button::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: linear-gradient(
-            to bottom right,
-            rgba(255, 255, 255, 0.3) 0%,
-            rgba(255, 255, 255, 0.1) 40%,
-            rgba(255, 255, 255, 0) 50%
-        );
-        transform: rotate(-45deg);
-        transition: all 0.3s ease;
+    .gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 1rem;
     }
 
-    .try-on-button:hover {
-        box-shadow: 0 10px 20px rgba(6, 190, 225, 0.4);
-    }
-
-    .try-on-button:hover::before {
-        left: 100%;
-    }
-
-    .queue-info, .info-message {
-        background-color: rgba(6, 190, 225, 0.1);
-        border: 1px solid #06bee1;
-        border-radius: 15px;
-        padding: 25px;
-        margin-top: 30px;
-        font-size: 18px;
-        text-align: center;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-    }
-
-    .error-message {
-        background-color: rgba(255, 83, 168, 0.1);
-        border: 1px solid #ff53a8;
-        color: #ff53a8;
-    }
-
-    .result-links a {
-        color: #06bee1;
-        text-decoration: none;
-        margin: 0 20px;
-        transition: all 0.3s ease;
-        font-weight: 500;
-        position: relative;
-    }
-
-    .result-links a::after {
-        content: '';
-        position: absolute;
+    .gallery img {
         width: 100%;
-        height: 2px;
-        bottom: -5px;
-        left: 0;
-        background-color: #06bee1;
-        transform: scaleX(0);
+        height: auto;
+        border-radius: 5px;
         transition: transform 0.3s ease;
     }
 
-    .result-links a:hover {
-        color: #ff53a8;
+    .gallery img:hover {
+        transform: scale(1.05);
     }
 
-    .result-links a:hover::after {
-        transform: scaleX(1);
-        background-color: #ff53a8;
+    .upload-area {
+        border: 2px dashed #a777e3;
+        border-radius: 10px;
+        padding: 2rem;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+
+    .upload-area:hover {
+        background-color: #f0e6ff;
+    }
+
+    .button-primary {
+        background: linear-gradient(135deg, #6e8efb, #a777e3);
+        color: white;
+        padding: 0.8rem 1.5rem;
+        border: none;
+        border-radius: 5px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .button-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .result-area {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 2rem;
+    }
+
+    .result-image {
+        width: 48%;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .feedback-area {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        margin-top: 2rem;
     }
 
     .loading {
         display: inline-block;
-        width: 40px;
-        height: 40px;
-        border: 3px solid rgba(6, 190, 225, 0.3);
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(255,255,255,.3);
         border-radius: 50%;
-        border-top-color: #06bee1;
-        animation: spin 1s cubic-bezier(0.55, 0.055, 0.675, 0.19) infinite;
+        border-top-color: #a777e3;
+        animation: spin 1s ease-in-out infinite;
     }
 
     @keyframes spin {
         to { transform: rotate(360deg); }
     }
-
-    .instruction-images {
-        display: flex;
-        justify-content: space-around;
-        margin-top: 40px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 30px;
-        border-radius: 20px;
-        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.2);
-    }
-
-    .instruction-image {
-        text-align: center;
-        max-width: 45%;
-    }
-
-    .instruction-image img {
-        max-width: 100%;
-        border-radius: 15px;
-        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.3);
-        transition: all 0.4s ease;
-    }
-
-    .instruction-image img:hover {
-        transform: scale(1.05) rotate(2deg);
-        box-shadow: 0 20px 40px rgba(6, 190, 225, 0.4);
-    }
-
-    .instruction-caption {
-        margin-top: 20px;
-        font-size: 18px;
-        color: #98c1d9;
-        font-weight: 400;
-        letter-spacing: 1px;
-    }
-
-    /* Custom scrollbar */
-    ::-webkit-scrollbar {
-        width: 12px;
-    }
-
-    ::-webkit-scrollbar-track {
-        background: #0a192f;
-    }
-
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #06bee1 0%, #0030ff 100%);
-        border-radius: 6px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, #0030ff 0%, #06bee1 100%);
-    }
-
-    /* Gradio-specific customizations */
-    .gr-button-primary {
-        background: linear-gradient(135deg, #06bee1 0%, #0030ff 100%) !important;
-        border: none !important;
-        font-family: 'Orbitron', sans-serif !important;
-    }
-
-    .gr-input, .gr-dropdown {
-        background-color: #0a192f !important;
-        border: 1px solid #06bee1 !important;
-        color: #e0fbfc !important;
-        border-radius: 10px !important;
-    }
-
-    .gr-form {
-        background-color: rgba(10, 25, 47, 0.7) !important;
-        border: 1px solid rgba(6, 190, 225, 0.3) !important;
-        border-radius: 15px !important;
-        backdrop-filter: blur(10px);
-    }
-
-    .gr-form:focus-within {
-        box-shadow: 0 0 20px rgba(6, 190, 225, 0.5);
-    }
-
-    /* Animation for loading text */
-    @keyframes pulse {
-        0% { opacity: 0.5; }
-        50% { opacity: 1; }
-        100% { opacity: 0.5; }
-    }
-
-    .loading-text {
-        animation: pulse 1.5s infinite;
-        font-family: 'Orbitron', sans-serif;
-        color: #06bee1;
-    }
 """
+
 def process_queue():
     while True:
         task = task_queue.get()
@@ -632,74 +447,74 @@ def process_queue():
 queue_thread = Thread(target=process_queue, daemon=True)
 queue_thread.start()
 
-with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
+with gr.Blocks(css=css, theme=gr.themes.Soft()) as demo:
     gr.HTML(
         """
         <div class="header">
-            <h1 class="title">ArbiTryOn: Virtual Fitting Room</h1>
-            <p class="subtitle">Experience the future of online shopping with our AI-powered try-on system</p>
+            <div class="container">
+                <h1 class="title">ArbiTryOn: Virtual Fitting Room</h1>
+                <p class="subtitle">Experience the future of online shopping with our AI-powered try-on system</p>
+            </div>
         </div>
         """
     )
 
-    with gr.Row():
-        with gr.Column(scale=3):
-            gr.Markdown("### Step 1: Select a Garment")
-            example_garment_gallery = gr.Gallery(value=example_garments, columns=2, rows=2, label="Example Garments", elem_class="example-garments")
-            clothes_input = gr.Image(label="Selected Garment", source="upload", type="numpy")
+    with gr.Row(class_name="container main-content"):
+        with gr.Column(scale=1, min_width=300):
+            gr.Markdown("### Step 1: Select a Garment", class_name="section-title")
+            example_garment_gallery = gr.Gallery(value=example_garments, columns=3, rows=3, label="Example Garments", elem_class="gallery")
+            clothes_input = gr.Image(label="Selected Garment", source="upload", type="numpy", elem_classes="upload-area")
 
-        with gr.Column(scale=3):
-            gr.Markdown("### Step 2: Upload Your Photo")
-            person_input = gr.Image(label="Your Photo", source="upload", type="numpy")
+        with gr.Column(scale=1, min_width=300):
+            gr.Markdown("### Step 2: Upload Your Photo", class_name="section-title")
+            person_input = gr.Image(label="Your Photo", source="upload", type="numpy", elem_classes="upload-area")
         
-        with gr.Column(scale=3):
-            # Radio buttons for category selection
+        with gr.Column(scale=1, min_width=300):
+            gr.Markdown("### Step 3: Select Category", class_name="section-title")
             category_input = gr.Radio(
                 choices=["Upper Body", "Lower Body", "Full Body"],
                 label="Select a Category",
-                value="Upper"  # Default value
-                )
+                value="Upper Body"
+            )
 
     gr.HTML(f"""
-        <div class="instruction-images">
-            <div class="instruction-image">
-                <img src="data:image/jpg;base64,{base64_cor}" alt="Correct pose">
-                <p class="instruction-caption">✅ Correct: Neutral pose, facing forward</p>
-            </div>
-            <div class="instruction-image">
-                <img src="data:image/jpeg;base64,{base64_inc}" alt="Incorrect pose">
-                <p class="instruction-caption">❌ Incorrect: Angled or complex pose</p>
+        <div class="container">
+            <div class="section">
+                <h3 class="section-title">Posing Instructions</h3>
+                <div style="display: flex; justify-content: space-between;">
+                    <div style="text-align: center; width: 48%;">
+                        <img src="data:image/jpg;base64,{base64_cor}" alt="Correct pose" style="width: 100%; border-radius: 10px;">
+                        <p>✅ Correct: Neutral pose, facing forward</p>
+                    </div>
+                    <div style="text-align: center; width: 48%;">
+                        <img src="data:image/jpeg;base64,{base64_inc}" alt="Incorrect pose" style="width: 100%; border-radius: 10px;">
+                        <p>❌ Incorrect: Angled or complex pose</p>
+                    </div>
+                </div>
             </div>
         </div>
     """)
 
-    try_on_button = gr.Button("Try It On!", elem_classes="try-on-button")
-    loading_indicator = gr.HTML(visible=False)
-    status_info = gr.HTML(visible=False, elem_classes="info-message")
-    masked_output = gr.Image(label="Mask Visualization", visible=False)
-    try_on_output = gr.Image(label="Virtual Try-On Result", visible=False)
-    image_link = gr.HTML(visible=True, elem_classes="result-links")
-    error_output = gr.HTML(visible=False, elem_classes="info-message")
+    with gr.Row(class_name="container"):
+        try_on_button = gr.Button("Try It On!", elem_classes="button-primary")
 
-    queue_note = gr.HTML(
-        """
-        <div class="info-message">
-            <p>
-                <strong>Note:</strong> If you see a queue status, your request may take extra time to process. 
-                We appreciate your patience as we work through all requests.
-            </p>
-        </div>
-        """,
-        visible=True
-    )
+    with gr.Row(class_name="container"):
+        loading_indicator = gr.HTML(visible=False)
+        status_info = gr.HTML(visible=False, elem_classes="section")
+        error_output = gr.HTML(visible=False, elem_classes="section")
 
-    # Feedback components
-    with gr.Row(visible=False) as feedback_row:
+    with gr.Row(class_name="container result-area", visible=False) as result_row:
+        masked_output = gr.Image(label="Mask Visualization", elem_classes="result-image")
+        try_on_output = gr.Image(label="Virtual Try-On Result", elem_classes="result-image")
+
+    image_link = gr.HTML(visible=True, elem_classes="container")
+
+    with gr.Row(class_name="container feedback-area", visible=False) as feedback_row:
         rating = gr.Slider(minimum=1, maximum=5, step=1, label="Rate your experience (1-5 stars)")
         comment = gr.Textbox(label="Leave a comment (optional)")
-        submit_feedback = gr.Button("Submit Feedback")
+        submit_feedback = gr.Button("Submit Feedback", elem_classes="button-primary")
 
-    feedback_status = gr.HTML(visible=False)
+    feedback_status = gr.HTML(visible=False, elem_classes="container")
 
     def select_example_garment(evt: gr.SelectData):
         return example_garments[evt.index]
@@ -711,11 +526,9 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             yield {
                 loading_indicator: gr.update(visible=False),
                 status_info: gr.update(visible=False),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
+                result_row: gr.update(visible=False),
                 error_output: gr.update(value="<p>Please upload both a garment image and a person image to proceed.</p>", visible=True),
                 image_link: gr.update(visible=False),
-                queue_note: gr.update(visible=True),
                 feedback_row: gr.update(visible=False)
             }
             return
@@ -724,11 +537,9 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             yield {
                 loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
                 status_info: gr.update(value="<p>Your request has been queued. We'll process it as soon as possible.</p>", visible=True),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
+                result_row: gr.update(visible=False),
                 error_output: gr.update(visible=False),
                 image_link: gr.update(visible=False),
-                queue_note: gr.update(visible=True)
             }
 
         def result_callback(result):
@@ -748,31 +559,25 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
                 yield {
                     loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
                     status_info: gr.update(value="<p>Processing your request. This may take a few minutes.</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
+                    result_row: gr.update(visible=False),
                     error_output: gr.update(visible=False),
                     image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
                 }
             elif current_position > 0:
                 yield {
                     loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
                     status_info: gr.update(value=f"<p>Your request is in queue. Current position: {current_position}</p><p>Estimated wait time: {current_position * 2} minutes</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
+                    result_row: gr.update(visible=False),
                     error_output: gr.update(visible=False),
                     image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
                 }
             else:
                 yield {
                     loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
                     status_info: gr.update(value="<p>Your request is next in line. Processing will begin shortly.</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
+                    result_row: gr.update(visible=False),
                     error_output: gr.update(visible=False),
                     image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
                 }
             
             queue_update_event.wait(timeout=5)
@@ -783,11 +588,10 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             yield {
                 loading_indicator: gr.update(visible=False),
                 status_info: gr.update(visible=False),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
-                image_link: gr.update(visible=False),
+                result_row: gr.update(visible=False),
                 error_output: gr.update(value=f"<p>{random.choice(error_messages)}</p><p>Remember, we're still in beta. We appreciate your understanding as we work to improve our service.</p>", visible=True),
-                queue_note: gr.update(visible=True)
+                image_link: gr.update(visible=False),
+                feedback_row: gr.update(visible=False)
             }
         elif generation_result['success']:
             generated_image_path = generation_result['image_path']
@@ -799,45 +603,41 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
                 masked_image_link = f"{gradio_url}/file={masked_image_path}"
                 person_image_link = f"{gradio_url}/file={person_image_path}"
-                link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a>'
+                link_html = f'<div class="section"><h3 class="section-title">Result Links</h3><p><a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a></p></div>'
 
                 yield {
                     loading_indicator: gr.update(visible=False),
                     status_info: gr.update(value="<p>Your virtual try-on is complete! Check out the results below.</p>", visible=True),
-                    masked_output: gr.update(value=masked_image_path, visible=True),
-                    try_on_output: gr.update(value=generated_image_path, visible=True),
+                    result_row: gr.update(visible=True),
+                    masked_output: gr.update(value=masked_image_path),
+                    try_on_output: gr.update(value=generated_image_path),
                     image_link: gr.update(value=link_html, visible=True),
                     error_output: gr.update(visible=False),
-                    queue_note: gr.update(visible=False),
                     feedback_row: gr.update(visible=True)
                 }
             else:
                 yield {
                     loading_indicator: gr.update(visible=False),
                     status_info: gr.update(visible=False),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
-                    image_link: gr.update(visible=False),
+                    result_row: gr.update(visible=False),
                     error_output: gr.update(value="<p>We encountered an issue while generating your try-on results. Our team has been notified and is working on a solution. Please try again later.</p>", visible=True),
-                    queue_note: gr.update(visible=True),
+                    image_link: gr.update(visible=False),
                     feedback_row: gr.update(visible=False)
                 }
         else:
             yield {
                 loading_indicator: gr.update(visible=False),
                 status_info: gr.update(visible=False),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
-                image_link: gr.update(visible=False),
+                result_row: gr.update(visible=False),
                 error_output: gr.update(value=f"<p>An error occurred: {generation_result['error']}</p><p>Our team has been notified and is working on a solution. We appreciate your patience as we improve our beta service.</p>", visible=True),
-                queue_note: gr.update(visible=True),
+                image_link: gr.update(visible=False),
                 feedback_row: gr.update(visible=False)
             }
 
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input, category_input],
-        outputs=[loading_indicator, status_info, masked_output, try_on_output, image_link, error_output, queue_note, feedback_row]
+        outputs=[loading_indicator, status_info, result_row, masked_output, try_on_output, image_link, error_output, feedback_row]
     )
 
     def submit_user_feedback(rating, comment):
@@ -850,18 +650,6 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
         submit_user_feedback,
         inputs=[rating, comment],
         outputs=feedback_status
-    )
-
-    gr.Markdown(
-        """
-        ## How It Works
-        1. Choose a garment from our collection or upload your own.
-        2. Upload a photo of yourself in a neutral pose (see instructions above).
-        3. Click "Try It On!" and let our AI work its magic.
-
-        Please note: ArbiTryOn is currently in beta. While we strive for accuracy, results may vary. 
-        We're continuously working to improve the experience and appreciate your feedback!
-        """
     )
 
 demo.queue()
