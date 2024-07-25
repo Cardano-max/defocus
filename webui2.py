@@ -16,7 +16,6 @@ import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
-import math
 import cv2
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
@@ -28,7 +27,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
 from modules.image_restoration import restore_image
-from modules.upscaler import perform_upscale
 
 # Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
@@ -118,23 +116,6 @@ def check_image_quality(image):
     
     return resolution >= threshold
 
-def get_shape_ceil(h, w):
-    return math.ceil(((h * w) ** 0.5) / 64.0) * 64.0
-
-def set_image_shape_ceil(im, shape_ceil):
-    shape_ceil = float(shape_ceil)
-    H, W = im.shape[:2]
-    
-    for _ in range(256):
-        current_shape_ceil = get_shape_ceil(H, W)
-        if abs(current_shape_ceil - shape_ceil) < 0.1:
-            break
-        k = shape_ceil / current_shape_ceil
-        H = int(round(float(H) * k / 64.0) * 64)
-        W = int(round(float(W) * k / 64.0) * 64)
-
-    return resize_image(im, W, H)
-
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
         # Process and cache the garment image
@@ -188,16 +169,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
-        # Upscale the person image
-        person_image = perform_upscale(person_image)
-
-        # Set the shape ceiling
-        shape_ceil = get_shape_ceil(person_image.shape[0], person_image.shape[1])
-        person_image = set_image_shape_ceil(person_image, shape_ceil)
-        inpaint_mask = set_image_shape_ceil(inpaint_mask, shape_ceil)
-
         # Set the aspect ratio for the model
-        aspect_ratio = f"{person_image.shape[1]}×{person_image.shape[0]}"
+        aspect_ratio = f"{target_width}×{target_height}"
 
         # Display and save the mask
         plt.figure(figsize=(10, 10))
@@ -257,8 +230,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_scheduler,
             -1,
             -1,
-            person_image.shape[1],
-            person_image.shape[0],
+            target_width,
+            target_height,
             -1,
             modules.config.default_overwrite_upscale,
             False,
