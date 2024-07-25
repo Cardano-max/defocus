@@ -1,29 +1,23 @@
-FROM nvidia/cuda:12.3.1-base-ubuntu22.04
-ENV DEBIAN_FRONTEND noninteractive
-ENV CMDARGS --listen
+# Use the official Python 3.10 image as the base image
+FROM python:3.10-slim
 
+# Set the working directory in the container
+WORKDIR /app
+
+# Install system dependencies
 RUN apt-get update -y && \
-	apt-get install -y curl libgl1 libglib2.0-0 python3-pip python-is-python3 git && \
-	apt-get clean && \
-	rm -rf /var/lib/apt/lists/*
+    apt-get install -y curl libgl1 libglib2.0-0 build-essential && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-COPY requirements_docker.txt requirements_versions.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements_docker.txt -r /tmp/requirements_versions.txt && \
-	rm -f /tmp/requirements_docker.txt /tmp/requirements_versions.txt
-RUN pip install --no-cache-dir xformers==0.0.22 --no-dependencies
-RUN curl -fsL -o /usr/local/lib/python3.10/dist-packages/gradio/frpc_linux_amd64_v0.2 https://cdn-media.huggingface.co/frpc-gradio-0.2/frpc_linux_amd64 && \
-	chmod +x /usr/local/lib/python3.10/dist-packages/gradio/frpc_linux_amd64_v0.2
+# Copy all the files from the current directory to the container's working directory
+COPY . /app
 
-RUN adduser --disabled-password --gecos '' user && \
-	mkdir -p /content/app /content/data
+# Install any necessary dependencies specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /content/
-RUN chown -R user:user /content
+# Expose any ports the app is expected to run on
+EXPOSE 8000
 
-WORKDIR /content
-USER user
-
-RUN git clone https://github.com/ehristoforu/DeFooocus /content/app
-RUN mv /content/app/models /content/app/models.org
-
-CMD [ "sh", "-c", "/content/entrypoint.sh ${CMDARGS}" ]
+# Define the command to run the application
+CMD ["python", "entry_with_update.py", "--disable-offload-from-vram", "--always-high-vram", "--theme", "dark", "--share", "--all-in-fp32", "--vae-in-fp32", "--clip-in-fp32", "--attention-split", "--debug-mode"]
