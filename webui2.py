@@ -285,9 +285,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         return {"success": False, "error": str(e)}
         
 example_garments = [
-    "images/b1.png",
     "images/b2.jpeg",
-    "images/b3.jpeg",
     "images/b4.jpeg",
     "images/b5.jpeg",
     "images/b6.jpeg",
