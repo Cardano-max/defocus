@@ -1,4 +1,4 @@
-import gradio as gr
+Copyimport gradio as gr
 import random
 import time
 import traceback
@@ -9,8 +9,8 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, resize_image
-from modules.private_logger import get_current_html_path
+from modules.util import HWC3, resize_image, generate_temp_filename
+from modules.private_logger import get_current_html_path, log
 import json
 import torch
 from PIL import Image
@@ -87,6 +87,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
+
+        # Save the user-uploaded person image
+        person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
+        person_pil.save(person_image_path)
+        print(f"User-uploaded person image saved at: {person_image_path}")
 
         categories = {
             "Upper Body": "upper_body",
@@ -228,7 +233,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path}
+            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
@@ -676,12 +681,14 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             if result['success']:
                 generated_image_path = result['image_path']
                 masked_image_path = result['masked_image_path']
+                person_image_path = result['person_image_path']
                 gradio_url = os.environ.get('GRADIO_PUBLIC_URL', '')
 
-                if gradio_url and generated_image_path and masked_image_path:
+                if gradio_url and generated_image_path and masked_image_path and person_image_path:
                     output_image_link = f"{gradio_url}/file={generated_image_path}"
                     masked_image_link = f"{gradio_url}/file={masked_image_path}"
-                    link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a>'
+                    person_image_link = f"{gradio_url}/file={person_image_path}"
+                    link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a>'
 
                     yield {
                         loading_indicator: gr.update(visible=False),
