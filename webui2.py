@@ -32,15 +32,15 @@ import hashlib
 import ldm_patched.modules.model_management
 import extras.ip_adapter as ip_adapter
 import ldm_patched.modules.controlnet
-import ldm_patched.modules.model_patcher
-
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+import ldm_patched.modules.controlnet
 
 # Initialize ControlNet models
 controlnet_canny = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_canny())
 controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_cpds())
+
+# Load CLIP model for image analysis
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # Initialize IP-Adapter
 try:
@@ -151,10 +151,10 @@ def check_image_quality(image):
 def apply_controlnet(image, control_type):
     if control_type == 'canny':
         control_image = cv2.Canny(image, 100, 200)
-        return ldm_patched.modules.model_patcher.ControlLora(controlnet_canny, control_image)
+        return (controlnet_canny, control_image)
     elif control_type == 'cpds':
         cpds_image = cv2.GaussianBlur(image, (15, 15), 0)
-        return ldm_patched.modules.model_patcher.ControlLora(controlnet_cpds, cpds_image)
+        return (controlnet_cpds, cpds_image)
     else:
         raise ValueError(f"Unsupported control type: {control_type}")
 
@@ -221,8 +221,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
         print(f"Generated inpaint prompt: {inpaint_prompt}")
 
-        canny_control = apply_controlnet(person_image, 'canny')
-        cpds_control = apply_controlnet(person_image, 'cpds')
+        canny_control, canny_image = apply_controlnet(person_image, 'canny')
+        cpds_control, cpds_image = apply_controlnet(person_image, 'cpds')
 
         ip_adapter_image = ip_adapter.preprocess(processed_clothes)
 
@@ -297,14 +297,16 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         args.extend([
             canny_control,
-            0.8,
-            1.0,
+            0.8,  # ControlNet weight for canny
+            1.0,  # ControlNet stop for canny
+            canny_image,
             cpds_control,
-            0.8,
-            1.0,
+            0.8,  # ControlNet weight for cpds
+            1.0,  # ControlNet stop for cpds
+            cpds_image,
             ip_adapter_image,
-            0.8,
-            1.0,
+            0.8,  # IP-Adapter weight
+            1.0,  # IP-Adapter stop
         ])
 
         task = worker.AsyncTask(args=args)
