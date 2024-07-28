@@ -23,28 +23,28 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from Masking.masking import Masking
-from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+from transformers import AutoProcessor, LlavaForConditionalGeneration
+from safetensors.torch import load_file
 from huggingface_hub import hf_hub_download
-import requests
+
+# Initialize LLaVA model
+processor = AutoProcessor.from_pretrained("liuhaotian/llava-v1.5-13b")
+model = LlavaForConditionalGeneration.from_pretrained("liuhaotian/llava-v1.5-13b", torch_dtype=torch.float16, low_cpu_mem_usage=True)
+model.to("cuda")
+
+def image_to_base64(img_path):
+    with open(img_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+base64_cor = image_to_base64("images/corre.jpg")
+base64_inc = image_to_base64("images/inc.jpg")
 
 # Set up environment variables for sharing data
 os.environ['GRADIO_PUBLIC_URL'] = ''
 os.environ['GENERATED_IMAGE_PATH'] = ''
 os.environ['MASKED_IMAGE_PATH'] = ''
-
-# Initialize CogVLM2-LLaMA3 model
-def initialize_cogvlm2():
-    model_name = "THUDM/cogvlm2-lama3-8b"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
-    return tokenizer, model, processor
-
-tokenizer, model, processor = initialize_cogvlm2()
 
 def custom_exception_handler(exc_type, exc_value, exc_traceback):
     print("An unhandled exception occurred:")
@@ -52,9 +52,6 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
     sys.exit(1)
 
 sys.excepthook = custom_exception_handler
-
-# Initialize Masker
-masker = Masking()
 
 # Initialize queue and locks
 task_queue = Queue()
@@ -66,32 +63,10 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def image_to_base64(img_path):
-    with open(img_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
-
-base64_cor = image_to_base64("images/corre.jpg")
-base64_inc = image_to_base64("images/inc.jpg")
-
-def analyze_image(image, query):
-    inputs = processor(text=query, images=image, return_tensors="pt").to(model.device)
-    output = model.generate(**inputs, max_new_tokens=50)
-    return tokenizer.decode(output[0], skip_special_tokens=True)
-
-def generate_inpaint_prompt(garment_image, person_image):
-    garment_query = "Describe this garment in detail, including its type, style, color, and any unique features."
-    garment_description = analyze_image(garment_image, garment_query)
-
-    person_query = "Describe this person's appearance, including body type, skin color, estimated height, gender, and approximate age."
-    person_description = analyze_image(person_image, person_query)
-
-    prompt = f"Garment: {garment_description}\n"
-    prompt += f"Person: {person_description}\n"
-    prompt += "Dress the person in the specified garment, ensuring proper fit and style. "
-    prompt += "Pay attention to color accuracy, garment details, and how it complements the person's body type. "
-    prompt += "Maintain the person's pose and proportions while naturally integrating the new garment."
-
-    return prompt
+def analyze_image_llava(image):
+    inputs = processor(text="Analyze this image in detail. Describe the garment type, color, style, fabric, and any notable features. For a person, describe their body type, apparent height, skin tone, gender, and approximate age.", images=image, return_tensors="pt").to("cuda", torch.float16)
+    output = model.generate(**inputs, max_new_tokens=200)
+    return processor.decode(output[0], skip_special_tokens=True)
 
 def process_and_cache_garment(garment_image):
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
@@ -156,17 +131,15 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
 
-        categories = {
-            "Upper Body": "upper_body",
-            "Lower Body": "lower_body",
-            "Full Body": "dresses"
-        }
-        print(f"Category Input: {category_input}")
-        
-        category = categories.get(category_input, "upper_body")
-        print(f"Using category: {category}")
-        
-        inpaint_mask = masker.get_mask(person_pil, category=category)
+        # Analyze images using LLaVA
+        garment_analysis = analyze_image_llava(processed_clothes)
+        person_analysis = analyze_image_llava(person_pil)
+
+        print(f"Garment Analysis: {garment_analysis}")
+        print(f"Person Analysis: {person_analysis}")
+
+        # Generate mask (you need to implement this function based on your masking model)
+        inpaint_mask = generate_mask(person_pil, category_input)
 
         orig_person_h, orig_person_w = person_image.shape[:2]
         person_aspect_ratio = orig_person_h / orig_person_w
@@ -199,8 +172,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
+        # Generate inpaint prompt using LLaVA analysis
+        inpaint_prompt = f"Dress the person in the analyzed garment. Person: {person_analysis}. Garment: {garment_analysis}. Ensure proper fit and style, maintaining the person's pose and proportions."
 
         loras = []
         for lora in modules.config.default_loras:
