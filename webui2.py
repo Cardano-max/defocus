@@ -30,9 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import requests
 from io import BytesIO
+from llava_analyzer import analyze_person, analyze_garment
 
-# OpenAI API key (replace with your actual key)
-OPENAI_API_KEY = "sk-proj-T6m8Q9lH5g7PssNhqI5pT3BlbkFJojg9hk5rjZbEe9HpnSqJ"
 
 
 def image_to_base64(img_path):
@@ -67,54 +66,9 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def analyze_image_gpt4(image):
-    # Convert numpy array to PIL Image if necessary
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    # Convert the image to base64
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENAI_API_KEY}"
-    }
-
-    payload = {
-        "model": "gpt-4-vision-preview",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Analyze this image in detail. For a person, describe their body type, estimated height, skin color, and any other notable features. For a garment, describe its color (be specific, including shade), style, design, any logos or patterns, and the type of fabric if discernible. Be very specific and technical in your description."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{img_str}"
-                        }
-                    }
-                ]
-            }
-        ],
-        "max_tokens": 300
-    }
-
-    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-    result = response.json()
-    
-    if 'choices' in result and len(result['choices']) > 0:
-        return result['choices'][0]['message']['content']
-    else:
-        return "Failed to analyze the image."
-
 def generate_inpaint_prompt(garment_image, person_image):
-    garment_description = analyze_image_gpt4(garment_image)
-    person_description = analyze_image_gpt4(person_image)
+    person_description = analyze_person(person_image)
+    garment_description = analyze_garment(garment_image)
     
     prompt = f"Create a hyper-realistic image of a person wearing a specific garment. Here are the details:\n\n"
     prompt += f"Person description: {person_description}\n\n"
