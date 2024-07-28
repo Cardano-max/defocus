@@ -17,6 +17,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -29,10 +30,10 @@ from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
-
 # Load CLIP model for image analysis
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
