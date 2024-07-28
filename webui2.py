@@ -47,22 +47,21 @@ controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
+import os
+import extras.ip_adapter as ip_adapter
+import modules.config
+
 # Initialize IP-Adapter
-try:
-    clip_vision_path = os.path.join(modules.config.path_clip_vision, 'clip_vision_vit_h.safetensors')
-    ip_negative_path = os.path.join(modules.config.path_controlnet, 'fooocus_ip_negative.safetensors')
-    ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
-    
-    if not os.path.exists(clip_vision_path):
-        print(f"CLIP vision model not found at {clip_vision_path}")
-    elif not os.path.exists(ip_negative_path):
-        print(f"IP negative file not found at {ip_negative_path}")
-    elif not os.path.exists(ip_adapter_path):
-        print(f"IP adapter file not found at {ip_adapter_path}")
-    else:
-        ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
-except Exception as e:
-    print(f"Error loading IP-Adapter: {str(e)}")
+clip_vision_path = os.path.join(modules.config.path_clip_vision, 'clip_vision_vit_h.safetensors')
+ip_negative_path = os.path.join(modules.config.path_controlnet, 'fooocus_ip_negative.safetensors')
+ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
+
+if os.path.exists(clip_vision_path) and os.path.exists(ip_negative_path) and os.path.exists(ip_adapter_path):
+    ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
+    print("IP-Adapter loaded successfully.")
+else:
+    print("Warning: One or more IP-Adapter files not found. IP-Adapter functionality will be disabled.")
+    ip_adapter_path = None
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -229,7 +228,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
         canny_control, canny_image = apply_controlnet(person_image, 'canny')
         cpds_control, cpds_image = apply_controlnet(person_image, 'cpds')
 
-        ip_adapter_image = ip_adapter.preprocess(processed_clothes, ip_adapter_path)
+        if ip_adapter_path and ip_adapter_path in ip_adapter.ip_adapters:
+            ip_adapter_image = ip_adapter.preprocess(processed_clothes, ip_adapter_path)
+        else:
+            print("IP-Adapter not available. Skipping IP-Adapter processing.")
+            ip_adapter_image = None
 
         loras = []
         for lora in modules.config.default_loras:
@@ -309,10 +312,14 @@ def virtual_try_on(clothes_image, person_image, category_input):
             0.8,  # ControlNet weight for cpds
             1.0,  # ControlNet stop for cpds
             cpds_image,
-            ip_adapter_image,
-            0.8,  # IP-Adapter weight
-            1.0,  # IP-Adapter stop
         ])
+
+        if ip_adapter_image is not None:
+            args.extend([
+                ip_adapter_image,
+                0.8,  # IP-Adapter weight
+                1.0,  # IP-Adapter stop
+            ])
 
         task = worker.AsyncTask(args=args)
         worker.async_tasks.append(task)
