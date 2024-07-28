@@ -78,18 +78,25 @@ garment_cache = {}
 garment_cache_lock = Lock()
 
 def analyze_image_with_llava(image, prompt):
-    inputs = processor(prompt, images=image, return_tensors="pt").to("mps")
+    inputs = llava_processor(images=image, text=prompt, return_tensors="pt")
+
+    # Ensure the image input is a list
+    if not isinstance(inputs["pixel_values"], list):
+        inputs["pixel_values"] = [inputs["pixel_values"]]
+
     output = llava_model.generate(**inputs, max_new_tokens=200)
-    return processor.batch_decode(output, skip_special_tokens=True)[0].split("ASSISTANT:")[-1].strip()
+    return llava_processor.batch_decode(output, skip_special_tokens=True)[0]
 
 def generate_detailed_description(garment_image, person_image):
-    garment_prompt = "USER: <image>\nDescribe this garment in detail, including its type, color, pattern, style, and any unique features. Also estimate its size and fabric type.\nASSISTANT:"
-    person_prompt = "USER: <image>\nDescribe this person in detail, including their gender, approximate age, body type, height, skin color, and any other notable features.\nASSISTANT:"
+    garment_prompt = "Describe the garment in the image in detail."
+    person_prompt = "Describe the person in the image."
 
-    garment_description = analyze_image_with_llava(garment_image, garment_prompt)
-    person_description = analyze_image_with_llava(person_image, person_prompt)
+    # Ensure both images are lists when passing to the model
+    garment_description = analyze_image_with_llava([garment_image], garment_prompt)  
+    person_description = analyze_image_with_llava([person_image], person_prompt)
 
-    return f"Garment: {garment_description}\n\nPerson: {person_description}"
+    detailed_description = f"{garment_description} {person_description}"
+    return detailed_description
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -248,7 +255,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            detailed_description,  # Use the detailed description as the prompt
+            detailed_description = generate_detailed_description(processed_clothes, person_image)
             inpaint_mask,
             True,
             True,
