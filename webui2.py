@@ -17,7 +17,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -29,10 +28,11 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import requests
+from io import BytesIO
 
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+# OpenAI API key (replace with your actual key)
+OPENAI_API_KEY = "sk-proj-T6m8Q9lH5g7PssNhqI5pT3BlbkFJojg9hk5rjZbEe9HpnSqJ"
 
 
 def image_to_base64(img_path):
@@ -67,49 +67,64 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def analyze_image(image):
-    # Convert numpy array to PIL Image
+def analyze_image_gpt4(image):
+    # Convert numpy array to PIL Image if necessary
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
-    # Prepare image for CLIP
-    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
+    # Convert the image to base64
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
     
-    # Get image features
-    with torch.no_grad():
-        image_features = clip_model.get_image_features(**inputs)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_API_KEY}"
+    }
+
+    payload = {
+        "model": "gpt-4-vision-preview",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Analyze this image in detail. For a person, describe their body type, estimated height, skin color, and any other notable features. For a garment, describe its color (be specific, including shade), style, design, any logos or patterns, and the type of fabric if discernible. Be very specific and technical in your description."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_str}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 300
+    }
+
+    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+    result = response.json()
     
-    # Use CLIP to get the most relevant labels
-    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
-                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
-                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
-                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
-    
-    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
-    with torch.no_grad():
-        text_features = clip_model.get_text_features(**text_inputs)
-    
-    # Calculate similarities
-    similarities = (image_features @ text_features.T).squeeze(0)
-    
-    # Get top 5 most similar labels
-    top_5_indices = similarities.argsort(descending=True)[:5]
-    top_5_labels = [candidate_labels[i] for i in top_5_indices]
-    
-    return top_5_labels
+    if 'choices' in result and len(result['choices']) > 0:
+        return result['choices'][0]['message']['content']
+    else:
+        return "Failed to analyze the image."
 
 def generate_inpaint_prompt(garment_image, person_image):
-    garment_labels = analyze_image(garment_image)
-    person_labels = analyze_image(person_image)
+    garment_description = analyze_image_gpt4(garment_image)
+    person_description = analyze_image_gpt4(person_image)
     
-    garment_description = ", ".join(garment_labels)
-    person_description = ", ".join(person_labels)
-    
-    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
-    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
-    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
-    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
-    
+    prompt = f"Create a hyper-realistic image of a person wearing a specific garment. Here are the details:\n\n"
+    prompt += f"Person description: {person_description}\n\n"
+    prompt += f"Garment description: {garment_description}\n\n"
+    prompt += f"Ensure the garment fits the person naturally, adapting to their body type and posture. "
+    prompt += f"The lighting and overall image quality should match the original person image. "
+    prompt += f"Pay close attention to how the garment drapes on the body, any visible logos or patterns, "
+    prompt += f"and the interaction between the garment's color and the person's skin tone. "
+    prompt += f"The result should look like a professional photograph, seamlessly blending the person and the new garment."
+
     return prompt
 
 # Function to process and cache garment image
