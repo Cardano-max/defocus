@@ -32,16 +32,30 @@ import hashlib
 import ldm_patched.modules.model_management
 import extras.ip_adapter as ip_adapter
 import ldm_patched.modules.controlnet
-import ldm_patched.modules.controlnet
-import modules.config
+from ldm_patched.modules.sd import load_checkpoint_guess_config
+from ldm_patched.contrib.external import VAEDecode, VAEEncode
+from ldm_patched.modules.sample import prepare_mask
+from ldm_patched.modules.sd1_clip import SDClipModel
 
 # Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
 
 # Initialize ControlNet models
 controlnet_canny = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_canny())
 controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_cpds())
+
+# Load high-quality VAE
+vae_model_path = os.path.join(modules.config.path_checkpoints, "vae-ft-mse-840000-ema-pruned.ckpt")
+vae = VAEDecode().load_vae(vae_model_path)
+
+# Initialize upscaler
+from modules.upscaler import perform_upscale
+upscaler = perform_upscale
+
+# Load face restoration model
+from gfpgan import GFPGANer
+face_restorer = GFPGANer(model_path='experiments/pretrained_models/GFPGANv1.4.pth', upscale=1)
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -76,18 +90,14 @@ garment_cache = {}
 garment_cache_lock = Lock()
 
 def analyze_image(image):
-    # Convert numpy array to PIL Image
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
-    # Prepare image for CLIP
     inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
     
-    # Get image features
     with torch.no_grad():
         image_features = clip_model.get_image_features(**inputs)
     
-    # Use CLIP to get the most relevant labels
     candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
                         "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
                         "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
@@ -97,10 +107,8 @@ def analyze_image(image):
     with torch.no_grad():
         text_features = clip_model.get_text_features(**text_inputs)
     
-    # Calculate similarities
     similarities = (image_features @ text_features.T).squeeze(0)
     
-    # Get top 5 most similar labels
     top_5_indices = similarities.argsort(descending=True)[:5]
     top_5_labels = [candidate_labels[i] for i in top_5_indices]
     
@@ -113,34 +121,31 @@ def generate_inpaint_prompt(garment_image, person_image):
     garment_description = ", ".join(garment_labels)
     person_description = ", ".join(person_labels)
     
-    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
-    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
-    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
-    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
+    prompt = f"Photorealistic image of a person wearing a {garment_description}. "
+    prompt += f"The person appears to be {person_description}. "
+    prompt += f"Ensure the fit is appropriate and the style matches the garment description perfectly. "
+    prompt += f"Pay close attention to details such as fabric texture, neckline, sleeves, and overall fit. "
+    prompt += f"Maintain the person's exact pose, body proportions, and facial features while seamlessly integrating the new garment."
     
     return prompt
 
-# Function to process and cache garment image
 def process_and_cache_garment(garment_image):
-    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
-    # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 512, 512)
+    processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
     
     return processed_garment
 
-# Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
+    receiver_email = "feedback@arbitryon.com"
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -151,7 +156,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
+        with smtplib.SMTP("localhost", 1025) as server:
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -160,14 +165,12 @@ def send_feedback_email(rating, comment):
         return False
 
 def check_image_quality(image):
-    # Convert to PIL Image if it's a numpy array
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
     width, height = image.size
     resolution = width * height
     
-    # Define a threshold for low resolution (e.g., less than 512x512)
     threshold = 512 * 512
     
     return resolution >= threshold
@@ -175,32 +178,26 @@ def check_image_quality(image):
 def apply_controlnet(image, control_type):
     if control_type == 'canny':
         control_image = cv2.Canny(image, 100, 200)
-        return controlnet_canny(control_image)
+        return controlnet_canny.prepare_control(control_image)
     elif control_type == 'cpds':
-        # Implement CPDS (Cartoon-style Preprocessor for Drawing Simplification) here
-        # For simplicity, we'll use a placeholder
         cpds_image = cv2.GaussianBlur(image, (15, 15), 0)
-        return controlnet_cpds(cpds_image)
+        return controlnet_cpds.prepare_control(cpds_image)
     else:
         raise ValueError(f"Unsupported control type: {control_type}")
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
-        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
-        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
-        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
@@ -215,32 +212,23 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
-        # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
-
-        # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
 
-        # Set target width and calculate corresponding height to maintain aspect ratio
         target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
-        # Ensure target height is also 1024 at maximum
         if target_height > 1024:
             target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
-        # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
-        # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
-        # Display and save the mask
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -257,25 +245,21 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Generate dynamic inpaint prompt
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
         print(f"Generated inpaint prompt: {inpaint_prompt}")
 
-        # Apply ControlNet
         canny_control = apply_controlnet(person_image, 'canny')
         cpds_control = apply_controlnet(person_image, 'cpds')
 
-        # Apply IP-Adapter
         ip_adapter_image = ip_adapter.preprocess(processed_clothes)
 
-        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
 
         args = [
             True,
-            inpaint_prompt,  # Use the dynamically generated prompt
+            inpaint_prompt,
             modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
@@ -338,13 +322,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_metadata_scheme,
         ]
 
-        # Add ControlNet and IP-Adapter arguments
         args.extend([
             canny_control,
-            0.8,  # ControlNet weight for canny
+            0.6,  # ControlNet weight for canny
             1.0,  # ControlNet stop for canny
             cpds_control,
-            0.8,  # ControlNet weight for cpds
+            0.4,  # ControlNet weight for cpds
             1.0,  # ControlNet stop for cpds
             ip_adapter_image,
             0.8,  # IP-Adapter weight
@@ -360,7 +343,20 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
+            generated_image = Image.open(task.results[0])
+            
+            # Apply face restoration
+            _, _, restored_face = face_restorer.enhance(np.array(generated_image), has_aligned=False, only_center_face=False, paste_back=True)
+            restored_image = Image.fromarray(restored_face)
+            
+            # Upscale the image
+            upscaled_image = upscaler(np.array(restored_image))
+            
+            # Save the final image
+            final_image_path = os.path.join(modules.config.path_outputs, f"final_image_{int(time.time())}.png")
+            Image.fromarray(upscaled_image).save(final_image_path)
+            
+            return {"success": True, "image_path": final_image_path, "masked_image_path": masked_image_path, "person_image_path": person_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
