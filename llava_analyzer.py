@@ -4,6 +4,7 @@ import torch
 from PIL import Image
 import requests
 from io import BytesIO
+import numpy as np
 from transformers import AutoTokenizer, BitsAndBytesConfig
 from llava.model import LlavaLlamaForCausalLM
 from llava.utils import disable_torch_init
@@ -54,10 +55,12 @@ class LLaVAImageAnalyzer:
                 image = Image.open(BytesIO(response.content)).convert('RGB')
             else:
                 image = Image.open(image).convert('RGB')
+        elif isinstance(image, np.ndarray):
+            image = Image.fromarray(image).convert('RGB')
         elif isinstance(image, Image.Image):
             image = image.convert('RGB')
         else:
-            raise ValueError("Image must be a file path, URL, or PIL Image object")
+            raise ValueError("Image must be a file path, URL, numpy array, or PIL Image object")
         
         self.img_tensor = self.image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half()
         if torch.backends.mps.is_available():
