@@ -33,17 +33,11 @@ import hashlib
 # LLaVA imports
 from transformers import AutoProcessor, LlavaForConditionalGeneration
 
-# LLaVA imports
-from transformers import AutoProcessor, LlavaForConditionalGeneration
-
 # Initialize LLaVA model and processor
 model_id = "llava-hf/llava-1.5-7b-hf"
 
 processor = AutoProcessor.from_pretrained(model_id)
-llava_model = LlavaForConditionalGeneration.from_pretrained(
-    model_id, 
-    device_map="mps"  # Use MPS for M1 Mac
-)
+llava_model = LlavaForConditionalGeneration.from_pretrained(model_id, device_map="mps", torch_dtype=torch.float32)
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -78,25 +72,31 @@ garment_cache = {}
 garment_cache_lock = Lock()
 
 def analyze_image_with_llava(image, prompt):
-    inputs = llava_processor(images=image, text=prompt, return_tensors="pt")
-
-    # Ensure the image input is a list
-    if not isinstance(inputs["pixel_values"], list):
-        inputs["pixel_values"] = [inputs["pixel_values"]]
-
-    output = llava_model.generate(**inputs, max_new_tokens=200)
-    return llava_processor.batch_decode(output, skip_special_tokens=True)[0]
+    # Ensure the image is in PIL Image format
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
+    
+    # Prepare inputs
+    inputs = processor(prompt, images=image, return_tensors="pt").to("mps")
+    
+    # Generate output
+    with torch.no_grad():
+        output = llava_model.generate(**inputs, max_new_tokens=200, do_sample=True, top_k=20, num_return_sequences=1)
+    
+    # Decode and return the generated text
+    return processor.batch_decode(output, skip_special_tokens=True)[0].split("ASSISTANT:")[-1].strip()
 
 def generate_detailed_description(garment_image, person_image):
-    garment_prompt = "Describe the garment in the image in detail."
-    person_prompt = "Describe the person in the image."
+    garment_prompt = "USER: <image>\nDescribe this garment in detail, including its type, color, pattern, style, and any unique features. Also estimate its size and fabric type.\nASSISTANT:"
+    person_prompt = "USER: <image>\nDescribe this person in detail, including their gender, approximate age, body type, height, skin color, and any other notable features.\nASSISTANT:"
 
-    # Ensure both images are lists when passing to the model
-    garment_description = analyze_image_with_llava([garment_image], garment_prompt)  
-    person_description = analyze_image_with_llava([person_image], person_prompt)
-
-    detailed_description = f"{garment_description} {person_description}"
-    return detailed_description
+    try:
+        garment_description = analyze_image_with_llava(garment_image, garment_prompt)
+        person_description = analyze_image_with_llava(person_image, person_prompt)
+        return f"Garment: {garment_description}\n\nPerson: {person_description}"
+    except Exception as e:
+        print(f"Error in generate_detailed_description: {str(e)}")
+        return "Unable to generate detailed description due to an error."
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -224,7 +224,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
         # Generate detailed description using LLaVA
-        detailed_description = generate_detailed_description(processed_clothes, person_image)
+        detailed_description = generate_detailed_description(processed_clothes, person_pil)
         print(f"Generated detailed description:\n{detailed_description}")
 
         # Define loras here
@@ -255,7 +255,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            detailed_description = generate_detailed_description(processed_clothes, person_image)
+            detailed_description,  # Use the detailed description as the prompt
             inpaint_mask,
             True,
             True,
