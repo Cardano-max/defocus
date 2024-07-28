@@ -30,14 +30,9 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
 
-# LLaVA imports
-from transformers import AutoProcessor, LlavaForConditionalGeneration
-
-# Initialize LLaVA model and processor
-model_id = "llava-hf/llava-1.5-7b-hf"
-
-processor = AutoProcessor.from_pretrained(model_id)
-llava_model = LlavaForConditionalGeneration.from_pretrained(model_id, device_map="mps", torch_dtype=torch.float32)
+# Load CLIP model for image analysis
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -71,32 +66,50 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def analyze_image_with_llava(image, prompt):
-    # Ensure the image is in PIL Image format
+def analyze_image(image):
+    # Convert numpy array to PIL Image
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
-    # Prepare inputs
-    inputs = processor(prompt, images=image, return_tensors="pt").to("mps")
+    # Prepare image for CLIP
+    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
     
-    # Generate output
+    # Get image features
     with torch.no_grad():
-        output = llava_model.generate(**inputs, max_new_tokens=200, do_sample=True, top_k=20, num_return_sequences=1)
+        image_features = clip_model.get_image_features(**inputs)
     
-    # Decode and return the generated text
-    return processor.batch_decode(output, skip_special_tokens=True)[0].split("ASSISTANT:")[-1].strip()
+    # Use CLIP to get the most relevant labels
+    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
+                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
+                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
+                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
+    
+    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        text_features = clip_model.get_text_features(**text_inputs)
+    
+    # Calculate similarities
+    similarities = (image_features @ text_features.T).squeeze(0)
+    
+    # Get top 5 most similar labels
+    top_5_indices = similarities.argsort(descending=True)[:5]
+    top_5_labels = [candidate_labels[i] for i in top_5_indices]
+    
+    return top_5_labels
 
-def generate_detailed_description(garment_image, person_image):
-    garment_prompt = "USER: <image>\nDescribe this garment in detail, including its type, color, pattern, style, and any unique features. Also estimate its size and fabric type.\nASSISTANT:"
-    person_prompt = "USER: <image>\nDescribe this person in detail, including their gender, approximate age, body type, height, skin color, and any other notable features.\nASSISTANT:"
-
-    try:
-        garment_description = analyze_image_with_llava(garment_image, garment_prompt)
-        person_description = analyze_image_with_llava(person_image, person_prompt)
-        return f"Garment: {garment_description}\n\nPerson: {person_description}"
-    except Exception as e:
-        print(f"Error in generate_detailed_description: {str(e)}")
-        return "Unable to generate detailed description due to an error."
+def generate_inpaint_prompt(garment_image, person_image):
+    garment_labels = analyze_image(garment_image)
+    person_labels = analyze_image(person_image)
+    
+    garment_description = ", ".join(garment_labels)
+    person_description = ", ".join(person_labels)
+    
+    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
+    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
+    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
+    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
+    
+    return prompt
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -108,7 +121,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
+    processed_garment = resize_image(HWC3(garment_image), 512, 512)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
@@ -223,9 +236,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Generate detailed description using LLaVA
-        detailed_description = generate_detailed_description(processed_clothes, person_pil)
-        print(f"Generated detailed description:\n{detailed_description}")
+        # Generate dynamic inpaint prompt
+        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
+        print(f"Generated inpaint prompt: {inpaint_prompt}")
 
         # Define loras here
         loras = []
@@ -255,7 +268,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            detailed_description,  # Use the detailed description as the prompt
+            "inpaint",
             inpaint_mask,
             True,
             True,
