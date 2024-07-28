@@ -32,6 +32,8 @@ import hashlib
 import ldm_patched.modules.model_management
 import extras.ip_adapter as ip_adapter
 import ldm_patched.modules.controlnet
+import ldm_patched.modules.controlnet
+import modules.config
 
 # Load CLIP model for image analysis
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -39,7 +41,7 @@ clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # Initialize ControlNet models
 controlnet_canny = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_canny())
-controlnet_depth = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_depth())
+controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_cpds())
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -174,11 +176,11 @@ def apply_controlnet(image, control_type):
     if control_type == 'canny':
         control_image = cv2.Canny(image, 100, 200)
         return controlnet_canny(control_image)
-    elif control_type == 'depth':
-        # Implement depth estimation here
+    elif control_type == 'cpds':
+        # Implement CPDS (Cartoon-style Preprocessor for Drawing Simplification) here
         # For simplicity, we'll use a placeholder
-        depth_image = np.random.randint(0, 255, image.shape[:2], dtype=np.uint8)
-        return controlnet_depth(depth_image)
+        cpds_image = cv2.GaussianBlur(image, (15, 15), 0)
+        return controlnet_cpds(cpds_image)
     else:
         raise ValueError(f"Unsupported control type: {control_type}")
 
@@ -261,7 +263,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Apply ControlNet
         canny_control = apply_controlnet(person_image, 'canny')
-        depth_control = apply_controlnet(person_image, 'depth')
+        cpds_control = apply_controlnet(person_image, 'cpds')
 
         # Apply IP-Adapter
         ip_adapter_image = ip_adapter.preprocess(processed_clothes)
@@ -341,9 +343,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
             canny_control,
             0.8,  # ControlNet weight for canny
             1.0,  # ControlNet stop for canny
-            depth_control,
-            0.8,  # ControlNet weight for depth
-            1.0,  # ControlNet stop for depth
+            cpds_control,
+            0.8,  # ControlNet weight for cpds
+            1.0,  # ControlNet stop for cpds
             ip_adapter_image,
             0.8,  # IP-Adapter weight
             1.0,  # IP-Adapter stop
