@@ -1,339 +1,95 @@
-import gradio as gr
-import random
-import time
-import traceback
-import sys
-import os
-import numpy as np
-import modules.config
-import modules.async_worker as worker
-import modules.constants as constants
-import modules.flags as flags
-from modules.util import HWC3, resize_image, generate_temp_filename
-from modules.private_logger import get_current_html_path, log
-import json
 import torch
+import numpy as np
 from PIL import Image
-import matplotlib.pyplot as plt
-import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
-from modules.flags import Performance
-from queue import Queue
-from threading import Lock, Event, Thread
-import base64
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from Masking.masking import Masking
-from modules.image_restoration import restore_image
-from concurrent.futures import ThreadPoolExecutor
-import hashlib
+from modules.util import HWC3, resize_image
+import modules.core as core
+import modules.config
+import modules.flags as flags
+import modules.sample_hijack as sample_hijack
+import extras.ip_adapter as ip_adapter
+import ldm_patched.modules.model_management as model_management
+import ldm_patched.modules.samplers as samplers
+import ldm_patched.modules.controlnet as controlnet
 
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+# Load necessary models
+def load_models():
+    global clip_vision, ip_adapter_model, controlnet_canny, controlnet_depth
+    
+    # Load CLIP vision model
+    clip_vision_path = modules.config.path_clip_vision
+    clip_vision = core.load_clip_vision(clip_vision_path)
+    
+    # Load IP-Adapter model
+    ip_adapter_path = modules.config.path_controlnet + "/ip-adapter-plus-face_sdxl_vit-h.bin"
+    ip_adapter_model = ip_adapter.load_ip_adapter(ip_adapter_path)
+    
+    # Load ControlNet models
+    controlnet_canny = controlnet.load_controlnet(modules.config.path_controlnet + "/control-lora-canny-rank128.safetensors")
+    controlnet_depth = controlnet.load_controlnet(modules.config.path_controlnet + "/control-lora-depth-rank128.safetensors")
 
-
-def image_to_base64(img_path):
-    with open(img_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
-
-base64_cor = image_to_base64("images/corre.jpg")
-base64_inc = image_to_base64("images/inc.jpg")
-
-# Set up environment variables for sharing data
-os.environ['GRADIO_PUBLIC_URL'] = ''
-os.environ['GENERATED_IMAGE_PATH'] = ''
-os.environ['MASKED_IMAGE_PATH'] = ''
-
-def custom_exception_handler(exc_type, exc_value, exc_traceback):
-    print("An unhandled exception occurred:")
-    traceback.print_exception(exc_type, exc_value, exc_traceback)
-    sys.exit(1)
-
-sys.excepthook = custom_exception_handler
-
-# Initialize Masker
-masker = Masking()
-
-# Initialize queue and locks
-task_queue = Queue()
-queue_lock = Lock()
-current_task_event = Event()
-queue_update_event = Event()
-
-# Garment cache
-garment_cache = {}
-garment_cache_lock = Lock()
-
-def analyze_image(image):
-    # Convert numpy array to PIL Image
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    # Prepare image for CLIP
-    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
-    
-    # Get image features
-    with torch.no_grad():
-        image_features = clip_model.get_image_features(**inputs)
-    
-    # Use CLIP to get the most relevant labels
-    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
-                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
-                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
-                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
-    
-    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
-    with torch.no_grad():
-        text_features = clip_model.get_text_features(**text_inputs)
-    
-    # Calculate similarities
-    similarities = (image_features @ text_features.T).squeeze(0)
-    
-    # Get top 5 most similar labels
-    top_5_indices = similarities.argsort(descending=True)[:5]
-    top_5_labels = [candidate_labels[i] for i in top_5_indices]
-    
-    return top_5_labels
-
-def generate_inpaint_prompt(garment_image, person_image):
-    garment_labels = analyze_image(garment_image)
-    person_labels = analyze_image(person_image)
-    
-    garment_description = ", ".join(garment_labels)
-    person_description = ", ".join(person_labels)
-    
-    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
-    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
-    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
-    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
-    
-    return prompt
-
-# Function to process and cache garment image
-def process_and_cache_garment(garment_image):
-    # Generating a unique key for the garment image
-    garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
-    
-    with garment_cache_lock:
-        if garment_hash in garment_cache:
-            return garment_cache[garment_hash]
-    
-    # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 512, 512)
-    
-    with garment_cache_lock:
-        garment_cache[garment_hash] = processed_garment
-    
-    return processed_garment
-
-# Function to send email (using Mailpit for demo)
-def send_feedback_email(rating, comment):
-    sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
-    
-    message = MIMEMultipart()
-    message["From"] = sender_email
-    message["To"] = receiver_email
-    message["Subject"] = f"ArbiTryOn Feedback - Rating: {rating}"
-
-    body = f"Rating: {rating}/5\nComment: {comment}"
-    message.attach(MIMEText(body, "plain"))
-
-    try:
-        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
-            server.sendmail(sender_email, receiver_email, message.as_string())
-        print("Feedback email sent successfully")
-        return True
-    except Exception as e:
-        print(f"Failed to send feedback email: {str(e)}")
-        return False
-
-def check_image_quality(image):
-    # Convert to PIL Image if it's a numpy array
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    width, height = image.size
-    resolution = width * height
-    
-    # Define a threshold for low resolution (e.g., less than 512x512)
-    threshold = 512 * 512
-    
-    return resolution >= threshold
+load_models()
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Process and cache the garment image
-        processed_clothes = process_and_cache_garment(clothes_image)
-
-        # Check person image quality and restore if necessary
-        if not check_image_quality(person_image):
-            print("Low resolution person image detected. Restoring...")
-            person_image = restore_image(person_image)
-
-        # Convert person_image to PIL Image if it's not already
-        if not isinstance(person_image, Image.Image):
-            person_pil = Image.fromarray(person_image)
-        else:
-            person_pil = person_image
-
-        # Save the user-uploaded person image
-        person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
-        person_pil.save(person_image_path)
-        print(f"User-uploaded person image saved at: {person_image_path}")
-
-        categories = {
-            "Upper Body": "upper_body",
-            "Lower Body": "lower_body",
-            "Full Body": "dresses"
-        }
-        print(f"Category Input: {category_input}")
+        # Process garment image
+        clothes_image = HWC3(clothes_image)
+        clothes_image = resize_image(clothes_image, 512, 512)
         
-        category = categories.get(category_input, "upper_body")
-        print(f"Using category: {category}")
+        # Process person image
+        person_image = HWC3(person_image)
+        person_image = resize_image(person_image, 512, 512)
         
-        # Generate mask
-        inpaint_mask = masker.get_mask(person_pil, category=category)
-
-        # Get the original dimensions
-        orig_person_h, orig_person_w = person_image.shape[:2]
-
-        # Calculate the aspect ratio of the person image
-        person_aspect_ratio = orig_person_h / orig_person_w
-
-        # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
-        target_height = int(target_width * person_aspect_ratio)
-
-        # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
-            target_width = int(target_height / person_aspect_ratio)
-
-        # Resize images while preserving aspect ratio
-        person_image = resize_image(HWC3(person_image), target_width, target_height)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
-
-        # Set the aspect ratio for the model
-        aspect_ratio = f"{target_width}×{target_height}"
-
-        # Display and save the mask
-        plt.figure(figsize=(10, 10))
-        plt.imshow(inpaint_mask, cmap='gray')
-        plt.axis('off')
+        # Generate mask using the masking module
+        mask = masker.get_mask(person_image, category=category_input)
         
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        buf.seek(0)
+        # Prepare ControlNet inputs
+        canny_image = cv2.Canny(clothes_image, 100, 200)
+        depth_image = cv2.Laplacian(cv2.cvtColor(clothes_image, cv2.COLOR_RGB2GRAY), cv2.CV_64F)
         
-        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
-        with open(masked_image_path, 'wb') as f:
-            f.write(buf.getvalue())
+        # Prepare IP-Adapter input
+        ip_adapter_image = ip_adapter.preprocess(clothes_image, ip_adapter_model)
         
-        plt.close()
-
-        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
-
-        # Generate dynamic inpaint prompt
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
-
-        # Define loras here
-        loras = []
-        for lora in modules.config.default_loras:
-            loras.extend(lora)
-
-        args = [
-            True,
-            "",
-            modules.config.default_prompt_negative,
-            False,
-            modules.config.default_styles,
-            Performance.QUALITY.value,
-            aspect_ratio,
-            1,
-            modules.config.default_output_format,
-            random.randint(constants.MIN_SEED, constants.MAX_SEED),
-            modules.config.default_sample_sharpness,
-            modules.config.default_cfg_scale,
-            modules.config.default_base_model_name,
-            modules.config.default_refiner_model_name,
-            modules.config.default_refiner_switch,
-        ] + loras + [
-            True,
-            "inpaint",
-            flags.disabled,
-            None,
-            [],
-            {'image': person_image, 'mask': inpaint_mask},
-            "inpaint",
-            inpaint_mask,
-            True,
-            True,
-            modules.config.default_black_out_nsfw,
-            1.5,
-            0.8,
-            0.3,
-            modules.config.default_cfg_tsnr,
-            modules.config.default_sampler,
-            modules.config.default_scheduler,
-            -1,
-            -1,
-            target_width,
-            target_height,
-            -1,
-            modules.config.default_overwrite_upscale,
-            False,
-            True,
-            False,
-            False,
-            100,
-            200,
-            flags.refiner_swap_method,
-            0.5,
-            False,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            False,
-            False,
-            modules.config.default_inpaint_engine_version,
-            1.0,
-            0.618,
-            False,
-            False,
-            0,
-            modules.config.default_save_metadata_to_images,
-            modules.config.default_metadata_scheme,
-        ]
-
-        args.extend([
-            processed_clothes,
-            0.86,
-            0.97,
-            flags.default_ip,
-        ])
-
-        task = worker.AsyncTask(args=args)
-        worker.async_tasks.append(task)
-
-        while not task.processing:
-            time.sleep(0.1)
-        while task.processing:
-            time.sleep(0.1)
-
-        if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
-        else:
-            return {"success": False, "error": "No results generated"}
-
+        # Generate dynamic prompt
+        prompt = generate_inpaint_prompt(clothes_image, person_image)
+        
+        # Prepare model inputs
+        model = core.load_model(modules.config.default_base_model_name)
+        positive = core.encode_prompt_condition(clip=model.clip, prompt=prompt)
+        negative = core.encode_prompt_condition(clip=model.clip, prompt=modules.config.default_prompt_negative)
+        
+        # Apply ControlNet
+        positive = controlnet.apply_controlnet(positive, controlnet_canny, canny_image, 1.0)
+        positive = controlnet.apply_controlnet(positive, controlnet_depth, depth_image, 1.0)
+        
+        # Apply IP-Adapter
+        model = ip_adapter.patch_model(model, [(ip_adapter_image, 1.0)])
+        
+        # Sampling
+        latent = core.generate_empty_latent(512, 512, 1)
+        samples = samplers.sample(
+            model, positive, negative, latent,
+            steps=modules.config.default_steps,
+            method=modules.config.default_sampler,
+            cfg=modules.config.default_cfg_scale,
+            denoise=1.0,
+            disable_noise=False
+        )
+        
+        # Decode image
+        image = core.decode_vae(model.vae, samples)
+        
+        # Apply mask
+        result = person_image * (1 - mask) + image * mask
+        
+        # Save and return result
+        result_path = modules.config.path_outputs + f"/result_{int(time.time())}.png"
+        Image.fromarray(result.astype(np.uint8)).save(result_path)
+        
+        return {"success": True, "image_path": result_path}
+    
     except Exception as e:
         print(f"Error in virtual_try_on: {str(e)}")
-        traceback.print_exc()
         return {"success": False, "error": str(e)}
         
 example_garments = [
