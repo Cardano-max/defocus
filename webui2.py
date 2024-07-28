@@ -35,15 +35,29 @@ import ldm_patched.modules.controlnet
 import ldm_patched.modules.model_patcher
 
 # Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # Initialize ControlNet models
 controlnet_canny = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_canny())
 controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_cpds())
 
 # Initialize IP-Adapter
-ip_adapter.load_ip_adapter(modules.config.path_clip_vision, modules.config.path_controlnet, modules.config.path_controlnet)
+try:
+    clip_vision_path = os.path.join(modules.config.path_clip_vision, 'clip_vision_vit_h.safetensors')
+    ip_negative_path = os.path.join(modules.config.path_controlnet, 'fooocus_ip_negative.safetensors')
+    ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
+    
+    if not os.path.exists(clip_vision_path):
+        print(f"CLIP vision model not found at {clip_vision_path}")
+    elif not os.path.exists(ip_negative_path):
+        print(f"IP negative file not found at {ip_negative_path}")
+    elif not os.path.exists(ip_adapter_path):
+        print(f"IP adapter file not found at {ip_adapter_path}")
+    else:
+        ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
+except Exception as e:
+    print(f"Error loading IP-Adapter: {str(e)}")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
