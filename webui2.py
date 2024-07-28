@@ -17,22 +17,22 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
+from transformers import AutoProcessor, AutoModelForCausalLM
+from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
 import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from Masking.masking import Masking
+from modules.image_restoration import restore_image
+
+
+
+# Garment processing and caching
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from transformers import AutoProcessor, LlavaForConditionalGeneration
-from safetensors.torch import load_file
-from huggingface_hub import hf_hub_download
-
-# Initialize LLaVA model
-processor = AutoProcessor.from_pretrained("liuhaotian/llava-v1.5-13b")
-model = LlavaForConditionalGeneration.from_pretrained("liuhaotian/llava-v1.5-13b", torch_dtype=torch.float16, low_cpu_mem_usage=True)
-model.to("cuda")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -53,6 +53,9 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
+# Initialize Masker
+masker = Masking()
+
 # Initialize queue and locks
 task_queue = Queue()
 queue_lock = Lock()
@@ -63,18 +66,16 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def analyze_image_llava(image):
-    inputs = processor(text="Analyze this image in detail. Describe the garment type, color, style, fabric, and any notable features. For a person, describe their body type, apparent height, skin tone, gender, and approximate age.", images=image, return_tensors="pt").to("cuda", torch.float16)
-    output = model.generate(**inputs, max_new_tokens=200)
-    return processor.decode(output[0], skip_special_tokens=True)
-
+# Function to process and cache garment image
 def process_and_cache_garment(garment_image):
+    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
+    # Processing the garment image (resize, etc.)
     processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
@@ -82,9 +83,10 @@ def process_and_cache_garment(garment_image):
     
     return processed_garment
 
+# Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"
+    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -95,7 +97,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:
+        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -104,58 +106,75 @@ def send_feedback_email(rating, comment):
         return False
 
 def check_image_quality(image):
+    # Convert to PIL Image if it's a numpy array
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
     width, height = image.size
     resolution = width * height
     
+    # Define a threshold for low resolution (e.g., less than 512x512)
     threshold = 512 * 512
     
     return resolution >= threshold
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
+        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
+        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
+        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
+        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
 
-        # Analyze images using LLaVA
-        garment_analysis = analyze_image_llava(processed_clothes)
-        person_analysis = analyze_image_llava(person_pil)
+        categories = {
+            "Upper Body": "upper_body",
+            "Lower Body": "lower_body",
+            "Full Body": "dresses"
+        }
+        print(f"Category Input: {category_input}")
+        
+        category = categories.get(category_input, "upper_body")
+        print(f"Using category: {category}")
+        
+        # Generate mask
+        inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        print(f"Garment Analysis: {garment_analysis}")
-        print(f"Person Analysis: {person_analysis}")
-
-        # Generate mask (you need to implement this function based on your masking model)
-        inpaint_mask = generate_mask(person_pil, category_input)
-
+        # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
+
+        # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
 
+        # Set target width and calculate corresponding height to maintain aspect ratio
         target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
+        # Ensure target height is also 1024 at maximum
         if target_height > 1024:
             target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
+        # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
+        # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
+        # Display and save the mask
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -172,9 +191,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Generate inpaint prompt using LLaVA analysis
-        inpaint_prompt = f"Dress the person in the analyzed garment. Person: {person_analysis}. Garment: {garment_analysis}. Ensure proper fit and style, maintaining the person's pose and proportions."
-
+        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
@@ -185,7 +202,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
-            flags.Performance.QUALITY.value,
+            Performance.QUALITY.value,
             aspect_ratio,
             1,
             modules.config.default_output_format,
@@ -202,7 +219,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            inpaint_prompt,
+            "Wearing a new garment",
             inpaint_mask,
             True,
             True,
