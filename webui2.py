@@ -29,23 +29,17 @@ from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 
+
 # LLaVA imports
 from transformers import AutoProcessor, LlavaForConditionalGeneration
-from transformers import BitsAndBytesConfig
 
 # Initialize LLaVA model and processor
 model_id = "llava-hf/llava-1.5-7b-hf"
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.float16
-)
 
 processor = AutoProcessor.from_pretrained(model_id)
 llava_model = LlavaForConditionalGeneration.from_pretrained(
     model_id, 
-    quantization_config=quantization_config, 
     device_map="mps"  # Use MPS for M1 Mac
-)
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
