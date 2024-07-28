@@ -1,4 +1,5 @@
 import gradio as gr
+import os
 import random
 import time
 import traceback
@@ -34,6 +35,10 @@ import extras.ip_adapter as ip_adapter
 import ldm_patched.modules.controlnet
 import ldm_patched.modules.controlnet
 
+# Add this near the top of your file, after other imports
+ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
+
+
 # Initialize ControlNet models
 controlnet_canny = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_canny())
 controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.downloading_controlnet_cpds())
@@ -42,22 +47,17 @@ controlnet_cpds = ldm_patched.modules.controlnet.load_controlnet(modules.config.
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
+import extras.ip_adapter as ip_adapter
+
 # Initialize IP-Adapter
-try:
-    clip_vision_path = os.path.join(modules.config.path_clip_vision, 'clip_vision_vit_h.safetensors')
-    ip_negative_path = os.path.join(modules.config.path_controlnet, 'fooocus_ip_negative.safetensors')
-    ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
-    
-    if not os.path.exists(clip_vision_path):
-        print(f"CLIP vision model not found at {clip_vision_path}")
-    elif not os.path.exists(ip_negative_path):
-        print(f"IP negative file not found at {ip_negative_path}")
-    elif not os.path.exists(ip_adapter_path):
-        print(f"IP adapter file not found at {ip_adapter_path}")
-    else:
-        ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
-except Exception as e:
-    print(f"Error loading IP-Adapter: {str(e)}")
+clip_vision_path = os.path.join(modules.config.path_clip_vision, 'clip_vision_vit_h.safetensors')
+ip_negative_path = os.path.join(modules.config.path_controlnet, 'fooocus_ip_negative.safetensors')
+ip_adapter_path = os.path.join(modules.config.path_controlnet, 'ip-adapter-plus_sdxl_vit-h.bin')
+
+if os.path.exists(clip_vision_path) and os.path.exists(ip_negative_path) and os.path.exists(ip_adapter_path):
+    ip_adapter.load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path)
+else:
+    print("Warning: One or more IP-Adapter files not found. IP-Adapter functionality may be limited.")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -224,7 +224,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         canny_control, canny_image = apply_controlnet(person_image, 'canny')
         cpds_control, cpds_image = apply_controlnet(person_image, 'cpds')
 
-        ip_adapter_image = ip_adapter.preprocess(processed_clothes)
+        ip_adapter_image = ip_adapter.preprocess(processed_clothes, ip_adapter_path)
 
         loras = []
         for lora in modules.config.default_loras:
