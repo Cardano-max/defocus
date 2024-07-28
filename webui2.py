@@ -17,7 +17,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import AutoFeatureExtractor, AutoModelForImageClassification, CLIPProcessor, CLIPModel
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -29,18 +28,24 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from sklearn.cluster import KMeans
 
-# Load pre-trained models
-feature_extractor = AutoFeatureExtractor.from_pretrained("microsoft/resnet-50")
-classification_model = AutoModelForImageClassification.from_pretrained("microsoft/resnet-50")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+# LLaVA imports
+from transformers import AutoProcessor, LlavaForConditionalGeneration
+from transformers import BitsAndBytesConfig
 
-# Move models to MPS device if available
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-classification_model.to(device)
-clip_model.to(device)
+# Initialize LLaVA model and processor
+model_id = "llava-hf/llava-1.5-7b-hf"
+quantization_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16
+)
+
+processor = AutoProcessor.from_pretrained(model_id)
+llava_model = LlavaForConditionalGeneration.from_pretrained(
+    model_id, 
+    quantization_config=quantization_config, 
+    device_map="mps"  # Use MPS for M1 Mac
+)
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -74,122 +79,30 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def get_dominant_colors(image, n_colors=3):
-    pixels = image.reshape(-1, 3)
-    kmeans = KMeans(n_clusters=n_colors)
-    kmeans.fit(pixels)
-    dominant_colors = kmeans.cluster_centers_
-    return np.uint8(dominant_colors)
+def analyze_image_with_llava(image, prompt):
+    inputs = processor(prompt, images=image, return_tensors="pt").to("mps")
+    output = llava_model.generate(**inputs, max_new_tokens=200)
+    return processor.batch_decode(output, skip_special_tokens=True)[0].split("ASSISTANT:")[-1].strip()
 
-def rgb_to_hex(rgb):
-    return '#{:02x}{:02x}{:02x}'.format(rgb[0], rgb[1], rgb[2])
+def generate_detailed_description(garment_image, person_image):
+    garment_prompt = "USER: <image>\nDescribe this garment in detail, including its type, color, pattern, style, and any unique features. Also estimate its size and fabric type.\nASSISTANT:"
+    person_prompt = "USER: <image>\nDescribe this person in detail, including their gender, approximate age, body type, height, skin color, and any other notable features.\nASSISTANT:"
 
-def analyze_image(image):
-    # Resize image to a standard size
-    image = Image.fromarray(image).resize((224, 224))
-    image_array = np.array(image)
+    garment_description = analyze_image_with_llava(garment_image, garment_prompt)
+    person_description = analyze_image_with_llava(person_image, person_prompt)
 
-    # Get dominant colors
-    dominant_colors = get_dominant_colors(image_array)
-    color_hexes = [rgb_to_hex(color) for color in dominant_colors]
-
-    # Prepare image for the model
-    inputs = feature_extractor(images=image, return_tensors="pt").to(device)
-
-    # Get image features
-    with torch.no_grad():
-        outputs = classification_model(**inputs)
-        logits = outputs.logits
-
-    # Get the predicted class
-    predicted_class_idx = logits.argmax(-1).item()
-    predicted_class = classification_model.config.id2label[predicted_class_idx]
-
-    # Use CLIP for more detailed analysis
-    clip_inputs = clip_processor(images=image, return_tensors="pt", padding=True).to(device)
-    with torch.no_grad():
-        clip_outputs = clip_model(**clip_inputs)
-        image_features = clip_outputs.image_embeds
-
-    return color_hexes, predicted_class, image_features
-
-def estimate_size(image):
-    height, width = image.shape[:2]
-    area = height * width
-    if area < 200000:
-        return "Small (S)"
-    elif area < 400000:
-        return "Medium (M)"
-    else:
-        return "Large (L)"
-
-def estimate_body_measurements(image):
-    height, width = image.shape[:2]
-    aspect_ratio = height / width
-    if aspect_ratio > 2:
-        return "Tall and Slim"
-    elif aspect_ratio < 1.5:
-        return "Short and Wide"
-    else:
-        return "Average Build"
-
-def detect_gender(image):
-    # This is a placeholder. In a real scenario, you'd use a trained model for gender detection.
-    return "Unknown"
-
-def estimate_age(image):
-    # This is a placeholder. In a real scenario, you'd use a trained model for age estimation.
-    return "Adult"
-
-def detect_logo(image):
-    # This is a placeholder. In a real scenario, you'd use object detection or logo recognition models.
-    return "No logo detected"
-
-def generate_inpaint_prompt(garment_image, person_image):
-    # Analyze garment
-    garment_colors, garment_type, garment_features = analyze_image(garment_image)
-    garment_size = estimate_size(garment_image)
-    logo = detect_logo(garment_image)
-
-    # Analyze person
-    _, _, person_features = analyze_image(person_image)
-    gender = detect_gender(person_image)
-    age = estimate_age(person_image)
-    body_measurements = estimate_body_measurements(person_image)
-
-    # Use CLIP to find the most relevant descriptions
-    with torch.no_grad():
-        text_inputs = clip_processor(
-            text=["casual", "formal", "sporty", "elegant", "traditional", "modern", "slim fit", "loose fit", "patterned", "plain"],
-            padding=True, return_tensors="pt"
-        ).to(device)
-        text_outputs = clip_model(**text_inputs)
-        text_embeds = text_outputs.text_embeds
-        
-        garment_similarity = (garment_features @ text_embeds.T).squeeze(0)
-        person_similarity = (person_features @ text_embeds.T).squeeze(0)
-        
-        garment_style = text_inputs.input_ids[garment_similarity.argmax().item()]
-        person_style = text_inputs.input_ids[person_similarity.argmax().item()]
-
-    prompt = f"Garment: {garment_type}, Size: {garment_size}, Colors: {', '.join(garment_colors)}. "
-    prompt += f"Style: {clip_processor.decode(garment_style)}. "
-    prompt += f"Logo: {logo}. "
-    prompt += f"Person: Gender: {gender}, Age: {age}, Build: {body_measurements}, Style: {clip_processor.decode(person_style)}. "
-    prompt += f"Dress the person in the specified garment, ensuring proper fit and style. "
-    prompt += f"Pay attention to color accuracy, garment details, and how it complements the person's body type and style. "
-    prompt += f"Maintain the person's pose and proportions while naturally integrating the new garment."
-
-    return prompt
+    return f"Garment: {garment_description}\n\nPerson: {person_description}"
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
+    # Generating a unique key for the garment image
     garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
     
     with garment_cache_lock:
         if garment_hash in garment_cache:
             return garment_cache[garment_hash]
     
+    # Processing the garment image (resize, etc.)
     processed_garment = resize_image(HWC3(garment_image), 1024, 1024)
     
     with garment_cache_lock:
@@ -200,7 +113,7 @@ def process_and_cache_garment(garment_image):
 # Function to send email (using Mailpit for demo)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
-    receiver_email = "feedback@arbitryon.com"
+    receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
     
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -211,7 +124,7 @@ def send_feedback_email(rating, comment):
     message.attach(MIMEText(body, "plain"))
 
     try:
-        with smtplib.SMTP("localhost", 1025) as server:
+        with smtplib.SMTP("localhost", 1025) as server:  # Mailpit default settings
             server.sendmail(sender_email, receiver_email, message.as_string())
         print("Feedback email sent successfully")
         return True
@@ -220,28 +133,35 @@ def send_feedback_email(rating, comment):
         return False
 
 def check_image_quality(image):
+    # Convert to PIL Image if it's a numpy array
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     
     width, height = image.size
     resolution = width * height
+    
+    # Define a threshold for low resolution (e.g., less than 512x512)
     threshold = 512 * 512
     
     return resolution >= threshold
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
+        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
+        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
+        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
+        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
@@ -256,22 +176,32 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
+        # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
+        # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
+
+        # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
+
+        # Set target width and calculate corresponding height to maintain aspect ratio
         target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
+        # Ensure target height is also 1024 at maximum
         if target_height > 1024:
             target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
+        # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
+        # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
+        # Display and save the mask
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -288,9 +218,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
+        # Generate detailed description using LLaVA
+        detailed_description = generate_detailed_description(processed_clothes, person_image)
+        print(f"Generated detailed description:\n{detailed_description}")
 
+        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
@@ -318,7 +250,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            inpaint_prompt,
+            detailed_description,  # Use the detailed description as the prompt
             inpaint_mask,
             True,
             True,
