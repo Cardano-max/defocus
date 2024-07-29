@@ -5,7 +5,7 @@ import torch
 import cv2
 from PIL import Image, ImageDraw
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
-from preprocess.openpose.run_openpose import OpenPose
+from Masking.preprocess.openpose.run_openpose import OpenPose
 
 class Masking:
     def __init__(self):
