@@ -9,15 +9,15 @@ import modules.config
 import modules.async_worker as worker
 import modules.constants as constants
 import modules.flags as flags
-from modules.util import HWC3, resize_image, generate_temp_filename
-from modules.private_logger import get_current_html_path, log
+from modules.util import HWC3, resize_image
+from modules.private_logger import get_current_html_path
 import json
 import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -26,13 +26,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from Masking.masking import Masking
-from modules.image_restoration import restore_image
-from concurrent.futures import ThreadPoolExecutor
-import hashlib
-
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 
 def image_to_base64(img_path):
@@ -63,73 +56,7 @@ queue_lock = Lock()
 current_task_event = Event()
 queue_update_event = Event()
 
-# Garment cache
-garment_cache = {}
-garment_cache_lock = Lock()
-
-def analyze_image(image):
-    # Convert numpy array to PIL Image
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    # Prepare image for CLIP
-    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
-    
-    # Get image features
-    with torch.no_grad():
-        image_features = clip_model.get_image_features(**inputs)
-    
-    # Use CLIP to get the most relevant labels
-    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
-                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
-                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
-                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
-    
-    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
-    with torch.no_grad():
-        text_features = clip_model.get_text_features(**text_inputs)
-    
-    # Calculate similarities
-    similarities = (image_features @ text_features.T).squeeze(0)
-    
-    # Get top 5 most similar labels
-    top_5_indices = similarities.argsort(descending=True)[:5]
-    top_5_labels = [candidate_labels[i] for i in top_5_indices]
-    
-    return top_5_labels
-
-def generate_inpaint_prompt(garment_image, person_image):
-    garment_labels = analyze_image(garment_image)
-    person_labels = analyze_image(person_image)
-    
-    garment_description = ", ".join(garment_labels)
-    person_description = ", ".join(person_labels)
-    
-    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
-    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
-    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
-    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
-    
-    return prompt
-
-# Function to process and cache garment image
-def process_and_cache_garment(garment_image):
-    # Generating a unique key for the garment image
-    garment_hash = hashlib.md5(garment_image.tobytes()).hexdigest()
-    
-    with garment_cache_lock:
-        if garment_hash in garment_cache:
-            return garment_cache[garment_hash]
-    
-    # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 512, 512)
-    
-    with garment_cache_lock:
-        garment_cache[garment_hash] = processed_garment
-    
-    return processed_garment
-
-# Function to send email (using Mailpit for demo)
+# Function to send email (using Mailpit for demonstration)
 def send_feedback_email(rating, comment):
     sender_email = "feedback@arbitryon.com"
     receiver_email = "feedback@arbitryon.com"  # This would be your actual feedback collection email
@@ -151,39 +78,15 @@ def send_feedback_email(rating, comment):
         print(f"Failed to send feedback email: {str(e)}")
         return False
 
-def check_image_quality(image):
-    # Convert to PIL Image if it's a numpy array
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
-    
-    width, height = image.size
-    resolution = width * height
-    
-    # Define a threshold for low resolution (e.g., less than 512x512)
-    threshold = 512 * 512
-    
-    return resolution >= threshold
+
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Process and cache the garment image
-        processed_clothes = process_and_cache_garment(clothes_image)
-
-        # Check person image quality and restore if necessary
-        if not check_image_quality(person_image):
-            print("Low resolution person image detected. Restoring...")
-            person_image = restore_image(person_image)
-
         # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
-
-        # Save the user-uploaded person image
-        person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
-        person_pil.save(person_image_path)
-        print(f"User-uploaded person image saved at: {person_image_path}")
 
         categories = {
             "Upper Body": "upper_body",
@@ -199,6 +102,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
         # Get the original dimensions
+        orig_clothes_h, orig_clothes_w = clothes_image.shape[:2]
         orig_person_h, orig_person_w = person_image.shape[:2]
 
         # Calculate the aspect ratio of the person image
@@ -214,6 +118,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
+        clothes_image = resize_image(HWC3(clothes_image), target_width, target_height)
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
@@ -236,10 +141,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
         plt.close()
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
-
-        # Generate dynamic inpaint prompt
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
 
         # Define loras here
         loras = []
@@ -269,7 +170,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            "inpaint",
+            "Wearing a new garment",
             inpaint_mask,
             True,
             True,
@@ -312,7 +213,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         ]
 
         args.extend([
-            processed_clothes,
+            clothes_image,
             0.86,
             0.97,
             flags.default_ip,
@@ -327,7 +228,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
+            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
@@ -337,7 +238,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
         return {"success": False, "error": str(e)}
         
 example_garments = [
+    "images/b1.png",
     "images/b2.jpeg",
+    "images/b3.jpeg",
     "images/b4.jpeg",
     "images/b5.jpeg",
     "images/b6.jpeg",
@@ -350,37 +253,11 @@ example_garments = [
     "images/b13.png",
     "images/b14.jpg",
     "images/b15.png",
+    "images/b16.png",
     "images/b17.png",
     "images/b18.png",
-    "images/t0.png",
-    "images/1.png",
-    "images/t2.png",
-    "images/t3.png",
-    "images/t4.png",
-    "images/t5.png",
-    "images/t6.png",
-    "images/t7.png",
-    "images/t16.png",
-    "images/l19.png",
-    "images/l20.png",
-    "images/l4.png",
-    "images/l5.png",
-    "images/l7.png",
-    "images/l8.png",
-    "images/l10.jpeg",
-    "images/l11.jpg",
-    "images/l12.jpeg",
-    "images/nine.jpeg",
-
-
-
 
 ]
-
-# Pre-process and cache garments here (storing as map, hasnain/zohaib its important if implementing anything like inpaint or segmentation )
-with ThreadPoolExecutor(max_workers=4) as executor:
-    example_garment_images = list(executor.map(lambda x: Image.open(x), example_garments))
-    executor.map(process_and_cache_garment, example_garment_images)
 
 # Subtle loading messages
 loading_messages = [
@@ -774,97 +651,40 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             }
             return
 
-        if current_task_event.is_set():
-            yield {
-                loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
-                status_info: gr.update(value="<p>Your request has been queued. We'll process it as soon as possible.</p>", visible=True),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
-                error_output: gr.update(visible=False),
-                image_link: gr.update(visible=False),
-                queue_note: gr.update(visible=True)
-            }
-
-        def result_callback(result):
-            nonlocal generation_done, generation_result
-            generation_done = True
-            generation_result = result
-
-        with queue_lock:
-            current_position = task_queue.qsize()
-            task_queue.put((clothes_image, person_image, category_input, result_callback))
-
-        generation_done = False
-        generation_result = None
-
-        while not generation_done:
-            if current_task_event.is_set() and current_position == 0:
-                yield {
-                    loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
-                    status_info: gr.update(value="<p>Processing your request. This may take a few minutes.</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
-                    error_output: gr.update(visible=False),
-                    image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
-                }
-            elif current_position > 0:
-                yield {
-                    loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
-                    status_info: gr.update(value=f"<p>Your request is in queue. Current position: {current_position}</p><p>Estimated wait time: {current_position * 2} minutes</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
-                    error_output: gr.update(visible=False),
-                    image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
-                }
-            else:
-                yield {
-                    loading_indicator: gr.update(visible=True, value=f"<div class='loading'></div><p>{random.choice(loading_messages)}</p>"),
-                    status_info: gr.update(value="<p>Your request is next in line. Processing will begin shortly.</p>", visible=True),
-                    masked_output: gr.update(visible=False),
-                    try_on_output: gr.update(visible=False),
-                    error_output: gr.update(visible=False),
-                    image_link: gr.update(visible=False),
-                    queue_note: gr.update(visible=True)
-                }
+        try:
+            result = virtual_try_on(clothes_image, person_image, category_input)
             
-            queue_update_event.wait(timeout=5)
-            queue_update_event.clear()
-            current_position = max(0, task_queue.qsize() - 1)
+            if result['success']:
+                generated_image_path = result['image_path']
+                masked_image_path = result['masked_image_path']
+                gradio_url = os.environ.get('GRADIO_PUBLIC_URL', '')
 
-        if generation_result is None:
-            yield {
-                loading_indicator: gr.update(visible=False),
-                status_info: gr.update(visible=False),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
-                image_link: gr.update(visible=False),
-                error_output: gr.update(value=f"<p>{random.choice(error_messages)}</p><p>Remember, we're still in beta. We appreciate your understanding as we work to improve our service.</p>", visible=True),
-                queue_note: gr.update(visible=True)
-            }
-        elif generation_result['success']:
-            generated_image_path = generation_result['image_path']
-            masked_image_path = generation_result['masked_image_path']
-            person_image_path = generation_result['person_image_path']
-            gradio_url = os.environ.get('GRADIO_PUBLIC_URL', '')
+                if gradio_url and generated_image_path and masked_image_path:
+                    output_image_link = f"{gradio_url}/file={generated_image_path}"
+                    masked_image_link = f"{gradio_url}/file={masked_image_path}"
+                    link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a>'
 
-            if gradio_url and generated_image_path and masked_image_path and person_image_path:
-                output_image_link = f"{gradio_url}/file={generated_image_path}"
-                masked_image_link = f"{gradio_url}/file={masked_image_path}"
-                person_image_link = f"{gradio_url}/file={person_image_path}"
-                link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a>'
-
-                yield {
-                    loading_indicator: gr.update(visible=False),
-                    status_info: gr.update(value="<p>Your virtual try-on is complete! Check out the results below.</p>", visible=True),
-                    masked_output: gr.update(value=masked_image_path, visible=True),
-                    try_on_output: gr.update(value=generated_image_path, visible=True),
-                    image_link: gr.update(value=link_html, visible=True),
-                    error_output: gr.update(visible=False),
-                    queue_note: gr.update(visible=False),
-                    feedback_row: gr.update(visible=True)
-                }
+                    yield {
+                        loading_indicator: gr.update(visible=False),
+                        status_info: gr.update(value="<p>Your virtual try-on is complete! Check out the results below.</p>", visible=True),
+                        masked_output: gr.update(value=masked_image_path, visible=True),
+                        try_on_output: gr.update(value=generated_image_path, visible=True),
+                        image_link: gr.update(value=link_html, visible=True),
+                        error_output: gr.update(visible=False),
+                        queue_note: gr.update(visible=False),
+                        feedback_row: gr.update(visible=True)
+                    }
+                else:
+                    yield {
+                        loading_indicator: gr.update(visible=False),
+                        status_info: gr.update(visible=False),
+                        masked_output: gr.update(visible=False),
+                        try_on_output: gr.update(visible=False),
+                        image_link: gr.update(visible=False),
+                        error_output: gr.update(value="<p>We encountered an issue while generating your try-on results. Our team has been notified and is working on a solution. Please try again later.</p>", visible=True),
+                        queue_note: gr.update(visible=True),
+                        feedback_row: gr.update(visible=False)
+                    }
             else:
                 yield {
                     loading_indicator: gr.update(visible=False),
@@ -872,18 +692,20 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
                     masked_output: gr.update(visible=False),
                     try_on_output: gr.update(visible=False),
                     image_link: gr.update(visible=False),
-                    error_output: gr.update(value="<p>We encountered an issue while generating your try-on results. Our team has been notified and is working on a solution. Please try again later.</p>", visible=True),
+                    error_output: gr.update(value=f"<p>An error occurred: {result['error']}</p><p>Our team has been notified and is working on a solution. We appreciate your patience as we improve our beta service.</p>", visible=True),
                     queue_note: gr.update(visible=True),
                     feedback_row: gr.update(visible=False)
                 }
-        else:
+        except Exception as e:
+            print(f"Error in process_virtual_try_on: {str(e)}")
+            traceback.print_exc()
             yield {
                 loading_indicator: gr.update(visible=False),
                 status_info: gr.update(visible=False),
                 masked_output: gr.update(visible=False),
                 try_on_output: gr.update(visible=False),
                 image_link: gr.update(visible=False),
-                error_output: gr.update(value=f"<p>An error occurred: {generation_result['error']}</p><p>Our team has been notified and is working on a solution. We appreciate your patience as we improve our beta service.</p>", visible=True),
+                error_output: gr.update(value=f"<p>An unexpected error occurred: {str(e)}</p><p>Our team has been notified and is working on a solution. We appreciate your patience as we improve our beta service.</p>", visible=True),
                 queue_note: gr.update(visible=True),
                 feedback_row: gr.update(visible=False)
             }
