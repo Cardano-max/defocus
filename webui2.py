@@ -24,7 +24,7 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from Masking.masking import Masking
+from modules.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -249,7 +249,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            inpaint_prompt,
+            'wearing a new garment',
             inpaint_mask,
             True,
             True,
