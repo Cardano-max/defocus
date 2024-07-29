@@ -103,18 +103,12 @@ if __name__ == "__main__":
     # Create a masked image by applying the mask to the original image
     masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
     
-    # # Display the mask and masked image
-    # cv2.imshow("Mask", mask_cv2)
-    # cv2.imshow("Masked Image", masked_image)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    # Specify the output directory
+    output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/images"
     
-    # # Specify the output directory
-    # output_dir = "arbi-tryon/images"
-    
-    # # Create the output directory if it doesn't exist
-    # os.makedirs(output_dir, exist_ok=True)
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
     # Save the mask and masked image in the specified directory
-    cv2.imwrite(os.path.join(output_dir, "images/output_mask1.png"), mask_cv2)
-    cv2.imwrite(os.path.join(output_dir, "images/output_masked_image1.png"), masked_image)
+    cv2.imwrite(os.path.join(output_dir, "output_mask.png"), mask_cv2)
+    cv2.imwrite(os.path.join(output_dir, "output_masked_image.png"), masked_image)
