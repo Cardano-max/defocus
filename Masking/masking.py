@@ -1,13 +1,12 @@
+# Masking/masking.py
+
 import numpy as np
 import cv2
-from PIL import Image, ImageDraw
-from functools import wraps
-from time import time
-import numpy as np
-
+from PIL import Image
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
-
+from functools import wraps
+from time import time
 
 def timing(f):
     @wraps(f)
@@ -24,187 +23,87 @@ class Masking:
     def __init__(self):
         self.parsing_model = Parsing(-1)
         self.openpose_model = OpenPose(-1)
+        self.label_map = {
+            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
+            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
+            "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
+            "bag": 16, "scarf": 17, "neck": 18
+        }
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        keypoints = self.openpose_model(img.resize((384,512)))
-        model_parse, _ = self.parsing_model(img.resize((384,512)))
-        mask, mask_gray = self.get_mask_location('hd', category, model_parse, keypoints)
-        mask = mask.resize((img.width,img.height))
-        mask = np.asarray(mask, dtype=np.uint8)
-        return mask
+        # Resize image to 384x512 for processing
+        img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
+        
+        # Get human parsing result
+        parse_result, _ = self.parsing_model(img_resized)
+        parse_array = np.array(parse_result)
 
-    @staticmethod
-    def extend_arm_mask(wrist, elbow, scale):
-        wrist = elbow + scale * (wrist - elbow)
-        return wrist
+        # Get pose estimation
+        keypoints = self.openpose_model(img_resized)
+        pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
-    @staticmethod
-    def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
-        img_copy = img.copy()
-        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-
-        cv2.floodFill(img, mask, (0, 0), 255)
-        img_inverse = cv2.bitwise_not(img)
-        dst = cv2.bitwise_or(img_copy, img_inverse)
-        return dst
-
-    @staticmethod
-    def refine_mask(mask):
-        contours, hierarchy = cv2.findContours(mask.astype(np.uint8),
-                                               cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_L1)
-        area = []
-        for j in range(len(contours)):
-            a_d = cv2.contourArea(contours[j], True)
-            area.append(abs(a_d))
-        refine_mask = np.zeros_like(mask).astype(np.uint8)
-        if len(area) != 0:
-            i = area.index(max(area))
-            cv2.drawContours(refine_mask, contours, i, color=255, thickness=-1)
-
-        return refine_mask
-
-    def get_mask_location(self, model_type, category, model_parse: Image.Image, keypoint: dict, width=384,height=512):
-        im_parse = model_parse.resize((width, height), Image.NEAREST)
-        parse_array = np.array(im_parse)
-
-        if model_type == 'hd':
-            arm_width = 60
-        elif model_type == 'dc':
-            arm_width = 45
-        else:
-            raise ValueError("model_type must be \'hd\' or \'dc\'!")
-
-        parse_head = (parse_array == 1).astype(np.float32) + \
-                     (parse_array == 3).astype(np.float32) + \
-                     (parse_array == 11).astype(np.float32)
-
-        parser_mask_fixed = (parse_array == label_map["left_shoe"]).astype(np.float32) + \
-                            (parse_array == label_map["right_shoe"]).astype(np.float32) + \
-                            (parse_array == label_map["hat"]).astype(np.float32) + \
-                            (parse_array == label_map["sunglasses"]).astype(np.float32) + \
-                            (parse_array == label_map["bag"]).astype(np.float32)
-
-        parser_mask_changeable = (parse_array == label_map["background"]).astype(np.float32)
-
-        arms_left = (parse_array == 14).astype(np.float32)
-        arms_right = (parse_array == 15).astype(np.float32)
-
-        if category == 'dresses':
-            parse_mask = (parse_array == 7).astype(np.float32) + \
-                         (parse_array == 4).astype(np.float32) + \
-                         (parse_array == 5).astype(np.float32) + \
-                         (parse_array == 6).astype(np.float32)
-
-            parser_mask_changeable += np.logical_and(parse_array, np.logical_not(parser_mask_fixed))
-
-        elif category == 'upper_body':
-            parse_mask = (parse_array == 4).astype(np.float32) + (parse_array == 7).astype(np.float32)
-            parser_mask_fixed_lower_cloth = (parse_array == label_map["skirt"]).astype(np.float32) + \
-                                            (parse_array == label_map["pants"]).astype(np.float32)
-            parser_mask_fixed += parser_mask_fixed_lower_cloth
-            parser_mask_changeable += np.logical_and(parse_array, np.logical_not(parser_mask_fixed))
+        # Create initial mask based on category
+        if category == 'upper_body':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
         elif category == 'lower_body':
-            parse_mask = (parse_array == 6).astype(np.float32) + \
-                         (parse_array == 12).astype(np.float32) + \
-                         (parse_array == 13).astype(np.float32) + \
-                         (parse_array == 5).astype(np.float32)
-            parser_mask_fixed += (parse_array == label_map["upper_clothes"]).astype(np.float32) + \
-                                 (parse_array == 14).astype(np.float32) + \
-                                 (parse_array == 15).astype(np.float32)
-            parser_mask_changeable += np.logical_and(parse_array, np.logical_not(parser_mask_fixed))
+            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+        elif category == 'dresses':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
-            raise NotImplementedError
+            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Load pose points
-        pose_data = keypoint["pose_keypoints_2d"]
-        pose_data = np.array(pose_data)
-        pose_data = pose_data.reshape((-1, 2))
+        # Create arm mask
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
 
-        im_arms_left = Image.new('L', (width, height))
-        im_arms_right = Image.new('L', (width, height))
-        arms_draw_left = ImageDraw.Draw(im_arms_left)
-        arms_draw_right = ImageDraw.Draw(im_arms_right)
-        if category == 'dresses' or category == 'upper_body':
-            shoulder_right = np.multiply(tuple(pose_data[2][:2]), height / 512.0)
-            shoulder_left = np.multiply(tuple(pose_data[5][:2]), height / 512.0)
-            elbow_right = np.multiply(tuple(pose_data[3][:2]), height / 512.0)
-            elbow_left = np.multiply(tuple(pose_data[6][:2]), height / 512.0)
-            wrist_right = np.multiply(tuple(pose_data[4][:2]), height / 512.0)
-            wrist_left = np.multiply(tuple(pose_data[7][:2]), height / 512.0)
-            ARM_LINE_WIDTH = int(arm_width / 512 * height)
-            size_left = [shoulder_left[0] - ARM_LINE_WIDTH // 2, shoulder_left[1] - ARM_LINE_WIDTH // 2, shoulder_left[0] + ARM_LINE_WIDTH // 2, shoulder_left[1] + ARM_LINE_WIDTH // 2]
-            size_right = [shoulder_right[0] - ARM_LINE_WIDTH // 2, shoulder_right[1] - ARM_LINE_WIDTH // 2, shoulder_right[0] + ARM_LINE_WIDTH // 2,
-                          shoulder_right[1] + ARM_LINE_WIDTH // 2]
+        # Create hand mask using pose data
+        hand_mask = self.create_hand_mask(pose_data, parse_array.shape)
 
+        # Combine arm and hand mask
+        arm_hand_mask = np.logical_or(arm_mask, hand_mask)
 
-            if wrist_right[0] <= 1. and wrist_right[1] <= 1.:
-                im_arms_right = arms_right
-            else:
-                wrist_right = self.extend_arm_mask(wrist_right, elbow_right, 1.2)
-                arms_draw_right.line(np.concatenate((shoulder_right, elbow_right, wrist_right)).astype(np.uint16).tolist(), 'white', ARM_LINE_WIDTH, 'curve')
-                arms_draw_right.arc(size_right, 0, 360, 'white', ARM_LINE_WIDTH // 2)
+        # Remove arms and hands from the mask
+        mask = np.logical_and(mask, np.logical_not(arm_hand_mask))
 
-            if wrist_left[0] <= 1. and wrist_left[1] <= 1.:
-                im_arms_left = arms_left
-            else:
-                wrist_left = self.extend_arm_mask(wrist_left, elbow_left, 1.2)
-                arms_draw_left.line(np.concatenate((wrist_left, elbow_left, shoulder_left)).astype(np.uint16).tolist(), 'white', ARM_LINE_WIDTH, 'curve')
-                arms_draw_left.arc(size_left, 0, 360, 'white', ARM_LINE_WIDTH // 2)
+        # Refine the mask
+        mask = self.refine_mask(mask)
 
-            hands_left = np.logical_and(np.logical_not(im_arms_left), arms_left)
-            hands_right = np.logical_and(np.logical_not(im_arms_right), arms_right)
-            parser_mask_fixed += hands_left + hands_right
+        # Resize mask back to original image size
+        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
+        mask_pil = mask_pil.resize(img.size, Image.Resampling.LANCZOS)
+        
+        return np.array(mask_pil)
 
-        parser_mask_fixed = np.logical_or(parser_mask_fixed, parse_head)
-        parse_mask = cv2.dilate(parse_mask, np.ones((5, 5), np.uint16), iterations=5)
-        if category == 'dresses' or category == 'upper_body':
-            neck_mask = (parse_array == 18).astype(np.float32)
-            neck_mask = cv2.dilate(neck_mask, np.ones((5, 5), np.uint16), iterations=1)
-            neck_mask = np.logical_and(neck_mask, np.logical_not(parse_head))
-            parse_mask = np.logical_or(parse_mask, neck_mask)
-            arm_mask = cv2.dilate(np.logical_or(im_arms_left, im_arms_right).astype('float32'), np.ones((5, 5), np.uint16), iterations=4)
-            parse_mask += np.logical_or(parse_mask, arm_mask)
+    def create_hand_mask(self, pose_data, shape):
+        hand_mask = np.zeros(shape, dtype=np.uint8)
+        
+        # Right hand
+        if pose_data[4][0] > 0 and pose_data[4][1] > 0:  # If right wrist is detected
+            cv2.circle(hand_mask, (int(pose_data[4][0]), int(pose_data[4][1])), 30, 255, -1)
+        
+        # Left hand
+        if pose_data[7][0] > 0 and pose_data[7][1] > 0:  # If left wrist is detected
+            cv2.circle(hand_mask, (int(pose_data[7][0]), int(pose_data[7][1])), 30, 255, -1)
+        
+        return hand_mask > 0  # Convert back to boolean mask
 
-        parse_mask = np.logical_and(parser_mask_changeable, np.logical_not(parse_mask))
-
-        parse_mask_total = np.logical_or(parse_mask, parser_mask_fixed)
-        inpaint_mask = 1 - parse_mask_total
-        img = np.where(inpaint_mask, 255, 0)
-        dst = self.hole_fill(img.astype(np.uint8))
-        dst = self.refine_mask(dst)
-        inpaint_mask = dst / 255 * 1
-        mask = Image.fromarray(inpaint_mask.astype(np.uint8) * 255)
-        mask_gray = Image.fromarray(inpaint_mask.astype(np.uint8) * 127)
-
-        return mask, mask_gray
-
-
-label_map = {
-    "background": 0,
-    "hat": 1,
-    "hair": 2,
-    "sunglasses": 3,
-    "upper_clothes": 4,
-    "skirt": 5,
-    "pants": 6,
-    "dress": 7,
-    "belt": 8,
-    "left_shoe": 9,
-    "right_shoe": 10,
-    "head": 11,
-    "left_leg": 12,
-    "right_leg": 13,
-    "left_arm": 14,
-    "right_arm": 15,
-    "bag": 16,
-    "scarf": 17,
-}
-
-
-if __name__ == "__main__":
-    Masker = Masking()
-    human_img = Image.open("hasnain.jpg").convert('RGB')
-    mask = Masker.get_mask(human_img, category='upper_body')
-    # mask.show()
+    def refine_mask(self, mask):
+        # Convert to uint8 for OpenCV operations
+        mask_uint8 = mask.astype(np.uint8) * 255
+        
+        # Apply morphological operations to smooth the mask
+        kernel = np.ones((5,5), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours and keep only the largest one
+        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            mask_refined = np.zeros_like(mask_uint8)
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, -1)
+        else:
+            mask_refined = mask_uint8
+        
+        return mask_refined > 0  # Convert back to boolean mask

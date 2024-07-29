@@ -109,12 +109,12 @@ if __name__ == "__main__":
     cv2.waitKey(0)
     cv2.destroyAllWindows()
     
-    # Specify the output directory
-    output_dir = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/images"
+    # # Specify the output directory
+    # output_dir = "arbi-tryon/images"
     
-    # Create the output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
+    # # Create the output directory if it doesn't exist
+    # os.makedirs(output_dir, exist_ok=True)
     
     # Save the mask and masked image in the specified directory
-    cv2.imwrite(os.path.join(output_dir, "output_mask.png"), mask_cv2)
-    cv2.imwrite(os.path.join(output_dir, "output_masked_image.png"), masked_image)
+    cv2.imwrite(os.path.join(output_dir, "images/output_mask1.png"), mask_cv2)
+    cv2.imwrite(os.path.join(output_dir, "images/output_masked_image1.png"), masked_image)

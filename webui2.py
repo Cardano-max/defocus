@@ -24,7 +24,7 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from modules.masking import Masking
+from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
