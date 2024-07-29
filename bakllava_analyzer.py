@@ -1,5 +1,3 @@
-# bakllava_analyzer.py
-
 import requests
 import base64
 from PIL import Image
@@ -45,9 +43,35 @@ def analyze_image(image, prompt):
         raise Exception(f"Error: {response.status_code}, {response.text}")
 
 def analyze_person(image):
-    prompt = "Describe the person in this image in detail. Include their Gender, Age, Body proportions(Use a technical ratio (e.g., 6:9 for height to width)),  body type, Body Weight(Estimate in pounds and provide a BMI category),Height(Apprx:Estimate in feet and inches),Skin color:Use a specific color code (e.g., Fitzpatrick scale),Clothing,Posture and stance, estimated height, skin color, and any other notable features. Be very specific and technical in your description."
+    prompt = (
+        "Describe the person in this image in detail. Include the following information: "
+        "1. Gender: Specify the person's gender. "
+        "2. Age: Estimate the person's age range. "
+        "3. Body proportions: Describe the body proportions (e.g., long legs, broad shoulders). "
+        "4. Body type: Describe the body type (e.g., athletic, slender, muscular). "
+        "5. Body weight: Estimate the body weight or describe if the person appears to be underweight, normal weight, or overweight. "
+        "6. Height: Provide an estimated height in feet or centimeters. "
+        "7. Skin color: Describe the skin tone and any noticeable features such as freckles or scars. "
+        "8. Clothing: Detail the type of clothing, its color, and any notable design elements. "
+        "9. Posture and stance: Describe the person's posture and stance (e.g., standing straight, slouched). "
+        "10. Notable features: Highlight any other notable features or distinguishing characteristics. "
+        "Be very specific and technical in your description."
+    )
     return analyze_image(image, prompt)
 
 def analyze_garment(image):
-    prompt = "Describe the garment in this image in detail. Include its Type:Specify the exact type of garment (e.g., blazer, dress shirt, trousers), Material: Identify the fabric type and texture, color (be specific, including shade),Size: Estimate the size (e.g., S, M, L, XL) and provide measurements,Fit,Design elements, Pattern: Describe any patterns or prints in detail,,Brand/Logo: Identify any visible branding or logos,For multi-piece outfits: Describe each piece separately (top, bottom, etc.),, style, design, any logos or patterns, and the type of fabric if discernible. Be very specific and technical in your description."
+    prompt = (
+        "Describe the garment in this image in detail. Include the following information: "
+        "1. Type: Specify the exact type of garment (e.g., blazer, dress shirt, trousers). "
+        "2. Material: Identify the fabric type and texture. "
+        "3. Color: Describe the color in detail, including the shade. "
+        "4. Size: Estimate the size (e.g., S, M, L, XL) and provide measurements if possible. "
+        "5. Fit: Describe the fit of the garment (e.g., slim fit, loose). "
+        "6. Design elements: Note any design elements such as buttons, zippers, or embroidery. "
+        "7. Pattern: Describe any patterns or prints in detail (e.g., stripes, polka dots). "
+        "8. Brand/Logo: Identify any visible branding or logos. "
+        "9. Multi-piece outfits: For multi-piece outfits, describe each piece separately (top, bottom, etc.). "
+        "10. Additional details: Include any other relevant information about the garment's style, design, or fabric. "
+        "Be very specific and technical in your description."
+    )
     return analyze_image(image, prompt)

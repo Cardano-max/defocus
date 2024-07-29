@@ -228,7 +228,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         args = [
             True,
-            inpaint_prompt,
+            "",
             modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
