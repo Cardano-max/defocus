@@ -1,17 +1,18 @@
-# Masking/masking.py
-
 import numpy as np
 import torch
 import cv2
 from PIL import Image, ImageDraw
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
-from Masking.preprocess.openpose.run_openpose import OpenPose
+from preprocess.openpose.run_openpose import OpenPose
+import mediapipe as mp
 
 class Masking:
     def __init__(self):
         self.processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
         self.model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
-        self.openpose = OpenPose(gpu_id=0)  # Adjust GPU ID if necessary
+        self.openpose = OpenPose(gpu_id=0)
+        self.mp_hands = mp.solutions.hands
+        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5)
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -40,6 +41,18 @@ class Masking:
             return refined_mask
         return mask
 
+    def detect_hands(self, image):
+        results = self.hands.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        hand_masks = []
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                landmarks = [[int(lm.x * image.shape[1]), int(lm.y * image.shape[0])] for lm in hand_landmarks.landmark]
+                hull = cv2.convexHull(np.array(landmarks))
+                cv2.fillConvexPoly(hand_mask, hull, 255)
+                hand_masks.append(hand_mask)
+        return hand_masks
+
     def get_mask(self, image, category='upper_body', width=384, height=512):
         # Ensure image is in RGB mode
         image = image.convert('RGB')
@@ -62,6 +75,9 @@ class Masking:
         # Get pose estimation
         keypoints = self.openpose(np.array(image))
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
+
+        # Detect hands
+        hand_masks = self.detect_hands(np.array(image))
 
         # Create masks
         parse_head = ((parse_array == 1) | (parse_array == 3) | (parse_array == 11)).astype(np.float32)
@@ -123,5 +139,9 @@ class Masking:
         inpaint_mask = 1 - (parser_mask_changeable | parse_mask | parser_mask_fixed)
         inpaint_mask = self.hole_fill((inpaint_mask * 255).astype(np.uint8))
         inpaint_mask = self.refine_mask(inpaint_mask)
+
+        # Unmask hands
+        for hand_mask in hand_masks:
+            inpaint_mask[hand_mask > 0] = 0
 
         return Image.fromarray(inpaint_mask)
