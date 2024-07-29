@@ -1,8 +1,8 @@
 import numpy as np
 import cv2
 from PIL import Image
-from ..Masking.preprocess.humanparsing.run_parsing import Parsing
-from ..Masking.preprocess.openpose.run_openpose import OpenPose
+from Masking.preprocess.humanparsing.run_parsing import Parsing
+from Masking.preprocess.openpose.run_openpose import OpenPose
 
 class Masking:
     def __init__(self):
