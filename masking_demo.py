@@ -95,21 +95,25 @@ class Masking:
 
 if __name__ == "__main__":
     masker = Masking()
-    human_img = Image.open("images/mota.jpg").convert('RGB')
-    mask = masker.get_mask(human_img, category='upper_body')
-    
-    # Convert the mask to OpenCV format
-    mask_cv2 = cv2.cvtColor(np.array(mask, dtype=np.uint8), cv2.COLOR_GRAY2BGR)
-    
-    # Create a masked image by applying the mask to the original image
-    masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
-    
-    # Specify the output directory
-    output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/images"
+    input_dir = "TEST"
+    output_dir = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST"
     
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Save the mask and masked image in the specified directory
-    cv2.imwrite(os.path.join(output_dir, "output_mask.png"), mask_cv2)
-    cv2.imwrite(os.path.join(output_dir, "output_masked_image.png"), masked_image)
+    # Process each image in the input directory
+    for idx, filename in enumerate(os.listdir(input_dir)):
+        if filename.endswith((".jpg", ".jpeg", ".png")):
+            img_path = os.path.join(input_dir, filename)
+            human_img = Image.open(img_path).convert('RGB')
+            mask = masker.get_mask(human_img, category='upper_body')
+            
+            # Convert the mask to OpenCV format
+            mask_cv2 = cv2.cvtColor(np.array(mask, dtype=np.uint8), cv2.COLOR_GRAY2BGR)
+            
+            # Create a masked image by applying the mask to the original image
+            masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
+            
+            # Save the mask and masked image in the specified directory with numbering
+            cv2.imwrite(os.path.join(output_dir, f"output_mask_{idx+1}.png"), mask_cv2)
+            cv2.imwrite(os.path.join(output_dir, f"output_masked_image_{idx+1}.png"), masked_image)
