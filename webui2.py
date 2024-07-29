@@ -157,7 +157,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 64, 64)
+    processed_garment = resize_image(HWC3(garment_image), 256, 256)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
@@ -297,7 +297,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            inpaint_prompt,
+            "wearing a new garment",
             inpaint_mask,
             True,
             True,
