@@ -17,7 +17,7 @@ class Masking:
 
     def get_mask(self, img, category='upper_body'):
         # Resize image to 384x512 for processing
-        img_resized = img.resize((384, 512), Image.LANCZOS)
+        img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
         
         # Get human parsing result
         parse_result, _ = self.parsing_model(img_resized)
@@ -55,22 +55,22 @@ class Masking:
 
         # Resize mask back to original image size
         mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
-        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        mask_pil = mask_pil.resize(img.size, Image.Resampling.LANCZOS)
         
         return np.array(mask_pil)
 
     def create_hand_mask(self, pose_data, shape):
-        hand_mask = np.zeros(shape, dtype=bool)
+        hand_mask = np.zeros(shape, dtype=np.uint8)
         
         # Right hand
         if pose_data[4][0] > 0 and pose_data[4][1] > 0:  # If right wrist is detected
-            cv2.circle(hand_mask, (int(pose_data[4][0]), int(pose_data[4][1])), 30, 1, -1)
+            cv2.circle(hand_mask, (int(pose_data[4][0]), int(pose_data[4][1])), 30, 255, -1)
         
         # Left hand
         if pose_data[7][0] > 0 and pose_data[7][1] > 0:  # If left wrist is detected
-            cv2.circle(hand_mask, (int(pose_data[7][0]), int(pose_data[7][1])), 30, 1, -1)
+            cv2.circle(hand_mask, (int(pose_data[7][0]), int(pose_data[7][1])), 30, 255, -1)
         
-        return hand_mask
+        return hand_mask > 0  # Convert back to boolean mask
 
     def refine_mask(self, mask):
         # Convert to uint8 for OpenCV operations
