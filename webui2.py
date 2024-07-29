@@ -65,10 +65,6 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from bakllava_analyzer import analyze_person, analyze_garment
 
-# Load CLIP model for image analysis
-clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
