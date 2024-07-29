@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import os
 from PIL import Image
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
