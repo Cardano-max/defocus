@@ -80,8 +80,8 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
-# Initialize Masker
 masker = Masking()
+inpaint_mask = masker.get_mask(person_pil, category=category)
 
 # Initialize queue and locks
 task_queue = Queue()
