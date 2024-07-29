@@ -157,7 +157,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 256, 256)
+    processed_garment = resize_image(HWC3(garment_image), 64, 64)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
@@ -195,7 +195,7 @@ def check_image_quality(image):
     resolution = width * height
     
     # Define a threshold for low resolution (e.g., less than 512x512)
-    threshold = 512 * 512
+    threshold = 100 * 100
     
     return resolution >= threshold
 
@@ -231,7 +231,16 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print(f"Using category: {category}")
         
         # Generate mask
-        inpaint_mask = masker.get_mask(person_pil, category=category)
+        inpaint_mask, segmentation_image, mask_image = masker.get_mask(person_pil, category=category)
+
+        # Save segmentation image
+        segmentation_image_path = os.path.join(modules.config.path_outputs, f"segmentation_{int(time.time())}.png")
+        segmentation_image.save(segmentation_image_path)
+
+        # Save mask image
+        mask_image_path = os.path.join(modules.config.path_outputs, f"mask_{int(time.time())}.png")
+        mask_image.save(mask_image_path)
+
 
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
@@ -240,12 +249,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_aspect_ratio = orig_person_h / orig_person_w
 
         # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
+        target_width = 512
         target_height = int(target_width * person_aspect_ratio)
 
         # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
+        if target_height > 512:
+            target_height = 512
             target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
@@ -362,12 +371,21 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
+            return {
+                "success": True, 
+                "image_path": task.results[0], 
+                "masked_image_path": masked_image_path, 
+                "person_image_path": person_image_path,
+                "segmentation_image_path": segmentation_image_path,
+                "mask_image_path": mask_image_path
+            }
         else:
             return {"success": False, "error": "No results generated"}
 
     except Exception as e:
         print(f"Error in virtual_try_on: {str(e)}")
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
         
 example_garments = [
     "images/b2.jpeg",
@@ -866,27 +884,27 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             queue_update_event.clear()
             current_position = max(0, task_queue.qsize() - 1)
 
-        if generation_result is None:
-            yield {
-                loading_indicator: gr.update(visible=False),
-                status_info: gr.update(visible=False),
-                masked_output: gr.update(visible=False),
-                try_on_output: gr.update(visible=False),
-                image_link: gr.update(visible=False),
-                error_output: gr.update(value=f"<p>{random.choice(error_messages)}</p><p>Remember, we're still in beta. We appreciate your understanding as we work to improve our service.</p>", visible=True),
-                queue_note: gr.update(visible=True)
-            }
-        elif generation_result['success']:
+        if generation_result['success']:
             generated_image_path = generation_result['image_path']
             masked_image_path = generation_result['masked_image_path']
             person_image_path = generation_result['person_image_path']
+            segmentation_image_path = generation_result['segmentation_image_path']
+            mask_image_path = generation_result['mask_image_path']
             gradio_url = os.environ.get('GRADIO_PUBLIC_URL', '')
 
-            if gradio_url and generated_image_path and masked_image_path and person_image_path:
+            if gradio_url and generated_image_path and masked_image_path and person_image_path and segmentation_image_path and mask_image_path:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
                 masked_image_link = f"{gradio_url}/file={masked_image_path}"
                 person_image_link = f"{gradio_url}/file={person_image_path}"
-                link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a>'
+                segmentation_image_link = f"{gradio_url}/file={segmentation_image_path}"
+                mask_image_link = f"{gradio_url}/file={mask_image_path}"
+                link_html = f'''
+                <a href="{output_image_link}" target="_blank">View Try-On Result</a> | 
+                <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | 
+                <a href="{person_image_link}" target="_blank">View Original Person Image</a> | 
+                <a href="{segmentation_image_link}" target="_blank">View Segmentation Image</a> | 
+                <a href="{mask_image_link}" target="_blank">View Mask Image</a>
+                '''
 
                 yield {
                     loading_indicator: gr.update(visible=False),
