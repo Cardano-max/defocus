@@ -103,11 +103,11 @@ if __name__ == "__main__":
     # Create a masked image by applying the mask to the original image
     masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
     
-    # Display the mask and masked image
-    cv2.imshow("Mask", mask_cv2)
-    cv2.imshow("Masked Image", masked_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # # Display the mask and masked image
+    # cv2.imshow("Mask", mask_cv2)
+    # cv2.imshow("Masked Image", masked_image)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
     
     # # Specify the output directory
     # output_dir = "arbi-tryon/images"
