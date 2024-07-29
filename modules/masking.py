@@ -1,3 +1,5 @@
+# Masking/masking.py
+
 import numpy as np
 import torch
 import cv2
@@ -9,7 +11,7 @@ class Masking:
     def __init__(self):
         self.processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
         self.model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
-        self.openpose = OpenPose(gpu_id=0)  # Assuming GPU 0, adjust as needed
+        self.openpose = OpenPose(gpu_id=0)  # Adjust GPU ID if necessary
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -39,6 +41,9 @@ class Masking:
         return mask
 
     def get_mask(self, image, category='upper_body', width=384, height=512):
+        # Ensure image is in RGB mode
+        image = image.convert('RGB')
+        
         # Resize image
         image = image.resize((width, height), Image.NEAREST)
         
@@ -87,7 +92,7 @@ class Masking:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
         # Process arms
-        arm_width = 45  # Adjust as needed
+        arm_width = int(0.15 * width)  # Adjust arm width based on image width
         im_arms = Image.new('L', (width, height))
         arms_draw = ImageDraw.Draw(im_arms)
 
@@ -116,7 +121,7 @@ class Masking:
         parse_mask = np.logical_or(parse_mask, neck_mask)
 
         inpaint_mask = 1 - (parser_mask_changeable | parse_mask | parser_mask_fixed)
-        inpaint_mask = self.hole_fill(inpaint_mask.astype(np.uint8) * 255)
+        inpaint_mask = self.hole_fill((inpaint_mask * 255).astype(np.uint8))
         inpaint_mask = self.refine_mask(inpaint_mask)
 
         return Image.fromarray(inpaint_mask)

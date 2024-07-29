@@ -1,3 +1,5 @@
+# webui2.py
+
 import gradio as gr
 import random
 import time
@@ -5,12 +7,20 @@ import traceback
 import sys
 import os
 import numpy as np
+import modules.config
+import modules.async_worker as worker
+import modules.constants as constants
+import modules.flags as flags
+from modules.util import HWC3, resize_image, generate_temp_filename
+from modules.private_logger import get_current_html_path, log
+import json
 import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
 import cv2
-from transformers import CLIPModel, CLIPProcessor
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
+from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
 import base64
@@ -81,7 +91,6 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 sys.excepthook = custom_exception_handler
 
 masker = Masking()
-inpaint_mask = masker.get_mask(person_pil, category=category)
 
 # Initialize queue and locks
 task_queue = Queue()
@@ -241,7 +250,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
+        inpaint_mask = resize_image(HWC3(np.array(inpaint_mask)), target_width, target_height)
 
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
@@ -295,7 +304,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            "inpaint",
+            inpaint_prompt,
             inpaint_mask,
             True,
             True,
@@ -359,8 +368,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
     except Exception as e:
         print(f"Error in virtual_try_on: {str(e)}")
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
         
 example_garments = [
     "images/b2.jpeg",
