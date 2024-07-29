@@ -96,4 +96,7 @@ if __name__ == "__main__":
     masker = Masking()
     human_img = Image.open("images/ok.png").convert('RGB')
     mask = masker.get_mask(human_img, category='upper_body')
-    Image.fromarray(mask).show()
+    
+    # Save the mask image
+    mask_image = Image.fromarray(mask.astype(np.uint8) * 255)
+    mask_image.save("output_mask.png")
