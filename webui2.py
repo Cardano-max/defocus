@@ -99,29 +99,12 @@ def generate_inpaint_prompt(garment_image, person_image):
     person_description = analyze_person(Image.fromarray(person_image))
     garment_description = analyze_garment(Image.fromarray(garment_image))
     
-    prompt = f"""Create a hyper-realistic image of a person wearing a specific garment. Use the following detailed descriptions:
+    prompt = f"Create a hyper-realistic image of a person wearing a specific garment. Here are the details:\n\n"
+    prompt += f"Person description: {person_description}\n\n"
+    prompt += f"Garment description: {garment_description}\n\n"
 
-Person Description:
-{person_description}
-
-Garment Description:
-{garment_description}
-
-Instructions:
-1. Ensure the garment fits the person naturally, adapting to their exact body type and posture.
-2. Match the lighting and overall image quality to the original person image.
-3. Pay close attention to how the garment drapes on the body, considering the person's specific measurements.
-4. Accurately represent all colors using the provided color codes.
-5. Include any logos, patterns, or design elements exactly as described.
-6. Maintain the person's original pose and expression.
-7. If the garment description doesn't include bottoms, use the bottoms from the original person image.
-8. Blend the new garment seamlessly with any original clothing items that remain.
-9. Ensure the background matches the original image.
-10. The result should look like a professional fashion photograph, with impeccable attention to detail.
-"""
 
     return prompt
-
 
 
 # Function to process and cache garment image
@@ -236,9 +219,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt:\n{inpaint_prompt}")
+        print(f"Generated inpaint prompt: {inpaint_prompt}")
 
         loras = []
         for lora in modules.config.default_loras:
@@ -247,7 +229,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         args = [
             True,
             inpaint_prompt,
-            "low quality, deformed, unrealistic, pixelated, blur, artificial, fake, exaggerated features, disproportioned body parts",  # Enhanced negative prompt
+            modules.config.default_prompt_negative,
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
