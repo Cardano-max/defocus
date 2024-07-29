@@ -96,30 +96,28 @@ garment_cache = {}
 garment_cache_lock = Lock()
 
 def generate_inpaint_prompt(garment_image, person_image):
-    person_description = analyze_person(person_image)
-    garment_description = analyze_garment(garment_image)
+    person_description = analyze_person(Image.fromarray(person_image))
+    garment_description = analyze_garment(Image.fromarray(garment_image))
     
-    prompt = f"""Create a hyper-realistic image of a person wearing a specific garment, with the following precise details:
+    prompt = f"""Create a hyper-realistic image of a person wearing a specific garment. Use the following detailed descriptions:
 
-Person:
+Person Description:
 {person_description}
 
-Garment:
+Garment Description:
 {garment_description}
 
 Instructions:
-1. Fit: Ensure the garment fits the person's body type perfectly, adapting to their specific proportions and posture.
-2. Lighting: Match the lighting conditions of the original person image exactly.
-3. Color Interaction: Pay special attention to how the garment's color interacts with the person's skin tone.
-4. Texture: Render the fabric texture of the garment with photorealistic detail.
-5. Background: Maintain the original background of the person image.
-6. Pose: Keep the person's pose consistent with the original image.
-7. Shadows and Highlights: Accurately depict how the garment creates shadows and catches highlights on the person's body.
-8. Accessories: If any accessories were mentioned in the person description, include them in the final image.
-9. Seamless Integration: The result should look like a professional photograph where the person is naturally wearing the described garment.
-10. Details: Ensure all specific details mentioned in both descriptions (logos, patterns, facial features, etc.) are clearly visible and accurate.
-
-The final image should be indistinguishable from a high-quality photograph, seamlessly blending the described person and garment.
+1. Ensure the garment fits the person naturally, adapting to their exact body type and posture.
+2. Match the lighting and overall image quality to the original person image.
+3. Pay close attention to how the garment drapes on the body, considering the person's specific measurements.
+4. Accurately represent all colors using the provided color codes.
+5. Include any logos, patterns, or design elements exactly as described.
+6. Maintain the person's original pose and expression.
+7. If the garment description doesn't include bottoms, use the bottoms from the original person image.
+8. Blend the new garment seamlessly with any original clothing items that remain.
+9. Ensure the background matches the original image.
+10. The result should look like a professional fashion photograph, with impeccable attention to detail.
 """
 
     return prompt

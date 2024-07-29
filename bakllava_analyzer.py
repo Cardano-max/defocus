@@ -48,40 +48,38 @@ def analyze_image(image, prompt):
 
 def analyze_person(image):
     prompt = """
-    Analyze the person in this image with extreme precision. Provide a technical description including:
+    Analyze the person in this image with extreme precision. Provide a detailed technical description including:
     1. Gender: Specify male or female.
     2. Age: Estimate the age range.
-    3. Body Proportions: Use a technical ratio (e.g., 6:9 for waist-to-height).
+    3. Body proportions: Use a technical ratio (e.g., 6:9 for height to width).
     4. Weight: Estimate in pounds and provide a BMI category.
     5. Height: Estimate in feet and inches.
-    6. Skin Color: Use a precise color description (e.g., RGB values or Pantone code).
-    7. Fitness Level: Describe muscle tone and body fat percentage.
-    8. Posture: Analyze standing position and alignment.
-    9. Facial Features: Describe eye color, hair color and style, facial hair if any.
-    10. Clothing: Describe any visible clothing not part of the target garment.
-    
-    Format the response as a structured list with these headings.
+    6. Skin color: Use a specific color code (e.g., Fitzpatrick scale).
+    7. Fitness level: Describe using specific terms (e.g., athletic, overweight, muscular).
+    8. Facial features: Describe prominent features.
+    9. Hair: Color, length, and style.
+    10. Clothing: Describe what the person is wearing in detail.
+    11. Posture and stance: Describe how the person is positioned.
+    12. Background: Briefly mention the setting.
+    Provide this information in a structured, bullet-point format.
     """
     return analyze_image(image, prompt)
 
 def analyze_garment(image):
     prompt = """
-    Provide an extremely detailed technical analysis of the garment in this image:
-    1. Type: Specify the exact type (e.g., blazer, dress shirt, etc.).
-    2. Color: Use precise color codes (RGB and Pantone).
-    3. Material: Identify the fabric type and composition.
-    4. Size: Estimate the size (S, M, L, XL, XXL, etc.) based on proportions.
-    5. Pattern/Design: Describe any patterns, prints, or unique design elements.
-    6. Fit: Analyze how it would fit on a body (slim, regular, loose, etc.).
-    7. Details: Note buttons, zippers, pockets, cuffs, collars, etc.
+    Analyze the garment in this image with extreme precision. Provide a detailed technical description including:
+    1. Type: Specify the exact type of garment (e.g., blazer, dress shirt, trousers).
+    2. Color: Use specific color codes (e.g., Pantone or RGB values) for all visible colors.
+    3. Material: Identify the fabric type and texture.
+    4. Size: Estimate the size (e.g., S, M, L, XL) and provide measurements if possible.
+    5. Fit: Describe how it fits (e.g., slim, regular, loose).
+    6. Design elements: Describe collars, cuffs, buttons, pockets, etc.
+    7. Pattern: Describe any patterns or prints in detail.
     8. Brand/Logo: Identify any visible branding or logos.
-    9. Condition: Assess the condition of the garment.
-    10. Style: Categorize the style (formal, casual, business, etc.).
-    11. For multi-piece outfits:
-        a. Top: Describe in detail.
-        b. Bottom: Describe pants, skirt, etc. if visible.
-        c. Accessories: Note any visible accessories.
-    
-    Format the response as a structured list with these headings.
+    9. Condition: Describe the condition of the garment.
+    10. Style: Categorize the style (e.g., formal, casual, streetwear).
+    11. Accessories: Describe any accompanying accessories.
+    12. For multi-piece outfits: Describe each piece separately (top, bottom, etc.).
+    Provide this information in a structured, bullet-point format.
     """
     return analyze_image(image, prompt)
