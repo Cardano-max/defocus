@@ -204,11 +204,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
-        # Check person image quality and restore if necessary
-        if not check_image_quality(person_image):
-            print("Low resolution person image detected. Restoring...")
-            person_image = restore_image(person_image)
-
         # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
