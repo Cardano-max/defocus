@@ -99,4 +99,4 @@ if __name__ == "__main__":
     
     # Save the mask image
     mask_image = Image.fromarray(mask.astype(np.uint8) * 255)
-    mask_image.save("output_mask.png")
+    mask_image.save("images/output_mask.png")
