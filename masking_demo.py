@@ -16,7 +16,7 @@ class Masking:
             "bag": 16, "scarf": 17, "neck": 18
         }
 
-    def get_mask(self, img, category='upper_body'):
+    def get_mask(self, img, category='dresses'):
         # Resize image to 384x512 for processing
         img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
         
@@ -106,7 +106,7 @@ if __name__ == "__main__":
         if filename.endswith((".jpg", ".jpeg", ".png")):
             img_path = os.path.join(input_dir, filename)
             human_img = Image.open(img_path).convert('RGB')
-            mask = masker.get_mask(human_img, category='upper_body')
+            mask = masker.get_mask(human_img, category='dresses')
             
             # Convert the mask to OpenCV format
             mask_cv2 = cv2.cvtColor(np.array(mask, dtype=np.uint8), cv2.COLOR_GRAY2BGR)
