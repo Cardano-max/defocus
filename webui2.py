@@ -231,15 +231,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print(f"Using category: {category}")
         
         # Generate mask
-        inpaint_mask, segmentation_image, mask_image = masker.get_mask(person_pil, category=category)
-
-        # Save segmentation image
-        segmentation_image_path = os.path.join(modules.config.path_outputs, f"segmentation_{int(time.time())}.png")
-        segmentation_image.save(segmentation_image_path)
-
-        # Save mask image
-        mask_image_path = os.path.join(modules.config.path_outputs, f"mask_{int(time.time())}.png")
-        mask_image.save(mask_image_path)
+        inpaint_mask = masker.get_mask(person_pil, category=category)
 
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
@@ -248,12 +240,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_aspect_ratio = orig_person_h / orig_person_w
 
         # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 1024
+        target_width = 512
         target_height = int(target_width * person_aspect_ratio)
 
         # Ensure target height is also 1024 at maximum
-        if target_height > 1024:
-            target_height = 1024
+        if target_height > 512:
+            target_height = 512
             target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
@@ -262,6 +254,23 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
+
+        # Display and save the mask
+        plt.figure(figsize=(10, 10))
+        plt.imshow(inpaint_mask, cmap='gray')
+        plt.axis('off')
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
+        buf.seek(0)
+        
+        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
+        with open(masked_image_path, 'wb') as f:
+            f.write(buf.getvalue())
+        
+        plt.close()
+
+        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
         # Generate dynamic inpaint prompt
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
@@ -353,22 +362,13 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {
-                "success": True, 
-                "image_path": task.results[0], 
-                "masked_image_path": mask_image_path, 
-                "person_image_path": person_image_path,
-                "segmentation_image_path": segmentation_image_path,
-                "mask_image_path": mask_image_path
-            }
+            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
         else:
             return {"success": False, "error": "No results generated"}
 
     except Exception as e:
         print(f"Error in virtual_try_on: {str(e)}")
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
-
+        
 example_garments = [
     "images/b2.jpeg",
     "images/b4.jpeg",
@@ -880,23 +880,13 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             generated_image_path = generation_result['image_path']
             masked_image_path = generation_result['masked_image_path']
             person_image_path = generation_result['person_image_path']
-            segmentation_image_path = generation_result['segmentation_image_path']
-            mask_image_path = generation_result['mask_image_path']
             gradio_url = os.environ.get('GRADIO_PUBLIC_URL', '')
 
-            if gradio_url and generated_image_path and masked_image_path and person_image_path and segmentation_image_path and mask_image_path:
+            if gradio_url and generated_image_path and masked_image_path and person_image_path:
                 output_image_link = f"{gradio_url}/file={generated_image_path}"
                 masked_image_link = f"{gradio_url}/file={masked_image_path}"
                 person_image_link = f"{gradio_url}/file={person_image_path}"
-                segmentation_image_link = f"{gradio_url}/file={segmentation_image_path}"
-                mask_image_link = f"{gradio_url}/file={mask_image_path}"
-                link_html = f'''
-                <a href="{output_image_link}" target="_blank">View Try-On Result</a> | 
-                <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | 
-                <a href="{person_image_link}" target="_blank">View Original Person Image</a> | 
-                <a href="{segmentation_image_link}" target="_blank">View Segmentation Image</a> | 
-                <a href="{mask_image_link}" target="_blank">View Mask Image</a>
-                '''
+                link_html = f'<a href="{output_image_link}" target="_blank">View Try-On Result</a> | <a href="{masked_image_link}" target="_blank">View Mask Visualization</a> | <a href="{person_image_link}" target="_blank">View Original Person Image</a>'
 
                 yield {
                     loading_indicator: gr.update(visible=False),
@@ -931,7 +921,6 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
                 feedback_row: gr.update(visible=False)
             }
 
-    # In the main Gradio interface setup
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input, category_input],

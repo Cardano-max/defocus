@@ -1,5 +1,3 @@
-# Masking/masking.py
-
 import numpy as np
 import torch
 import cv2
@@ -74,11 +72,6 @@ class Masking:
         )
         parse_array = upsampled_logits.argmax(dim=1)[0].numpy()
 
-        # Visualize segmentation
-        segmentation_image = np.zeros((height, width, 3), dtype=np.uint8)
-        for label, color in self.label_map.items():
-            segmentation_image[parse_array == color] = [color * 15, color * 15, color * 15]
-
         # Get pose estimation
         keypoints = self.openpose(np.array(image))
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
@@ -136,10 +129,6 @@ class Masking:
         arm_mask = np.array(im_arms) / 255.0
         parse_mask = np.logical_or(parse_mask, arm_mask).astype(np.float32)
 
-        # Unmask hands before dilation
-        for hand_mask in hand_masks:
-            parse_mask[hand_mask > 0] = 0
-
         # Final mask processing
         parse_mask = cv2.dilate(parse_mask, np.ones((5, 5), np.uint16), iterations=5)
         neck_mask = (parse_array == 18).astype(np.float32)
@@ -151,11 +140,8 @@ class Masking:
         inpaint_mask = self.hole_fill((inpaint_mask * 255).astype(np.uint8))
         inpaint_mask = self.refine_mask(inpaint_mask)
 
-        # Unmask hands again after refinement
+        # Unmask hands
         for hand_mask in hand_masks:
             inpaint_mask[hand_mask > 0] = 0
 
-        # Visualize final mask
-        mask_image = inpaint_mask.copy()
-        
-        return Image.fromarray(inpaint_mask), Image.fromarray(segmentation_image), Image.fromarray(mask_image)
+        return Image.fromarray(inpaint_mask)
