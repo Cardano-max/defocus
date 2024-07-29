@@ -353,21 +353,21 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-                    return {
-                        "success": True, 
-                        "image_path": task.results[0], 
-                        "masked_image_path": mask_image_path, 
-                        "person_image_path": person_image_path,
-                        "segmentation_image_path": segmentation_image_path,
-                        "mask_image_path": mask_image_path
-                    }
-                else:
-                    return {"success": False, "error": "No results generated"}
+            return {
+                "success": True, 
+                "image_path": task.results[0], 
+                "masked_image_path": mask_image_path, 
+                "person_image_path": person_image_path,
+                "segmentation_image_path": segmentation_image_path,
+                "mask_image_path": mask_image_path
+            }
+        else:
+            return {"success": False, "error": "No results generated"}
 
-            except Exception as e:
-                print(f"Error in virtual_try_on: {str(e)}")
-                traceback.print_exc()
-                return {"success": False, "error": str(e)}
+    except Exception as e:
+        print(f"Error in virtual_try_on: {str(e)}")
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
 
 example_garments = [
     "images/b2.jpeg",
