@@ -92,23 +92,13 @@ def load_ip_adapter(clip_vision_path, ip_negative_path, ip_adapter_path):
     global clip_vision, ip_negative, ip_adapters
 
     if clip_vision is None and isinstance(clip_vision_path, str):
-        clip_vision_file = os.path.join(clip_vision_path, 'clip_vision_vit_h.safetensors')
-        if os.path.exists(clip_vision_file):
-            clip_vision = ldm_patched.modules.clip_vision.load(clip_vision_file)
-        else:
-            print(f"CLIP vision model not found at {clip_vision_file}")
-            return
+        clip_vision = ldm_patched.modules.clip_vision.load(clip_vision_path)
 
     if ip_negative is None and isinstance(ip_negative_path, str):
-        if os.path.exists(ip_negative_path):
-            ip_negative = sf.load_file(ip_negative_path)['data']
-        else:
-            print(f"IP negative file not found at {ip_negative_path}")
-            return
+        ip_negative = sf.load_file(ip_negative_path)['data']
 
     if not isinstance(ip_adapter_path, str) or ip_adapter_path in ip_adapters:
         return
-
 
     load_device = model_management.get_torch_device()
     offload_device = torch.device('cpu')
