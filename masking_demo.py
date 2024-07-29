@@ -95,7 +95,7 @@ class Masking:
 
 if __name__ == "__main__":
     masker = Masking()
-    human_img = Image.open("images/ok.png").convert('RGB')
+    human_img = Image.open("images/mota.jpg").convert('RGB')
     mask = masker.get_mask(human_img, category='upper_body')
     
     # Convert the mask to OpenCV format
