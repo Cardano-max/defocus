@@ -30,7 +30,6 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from bakllava_analyzer import analyze_person, analyze_garment
 
-
 ###########
 
 # webui2.py
@@ -97,19 +96,34 @@ garment_cache = {}
 garment_cache_lock = Lock()
 
 def generate_inpaint_prompt(garment_image, person_image):
-    person_description = analyze_person(Image.fromarray(person_image))
-    garment_description = analyze_garment(Image.fromarray(garment_image))
+    person_description = analyze_person(person_image)
+    garment_description = analyze_garment(garment_image)
     
-    prompt = f"Create a hyper-realistic image of a person wearing a specific garment. Here are the details:\n\n"
-    prompt += f"Person description: {person_description}\n\n"
-    prompt += f"Garment description: {garment_description}\n\n"
-    prompt += f"Ensure the garment fits the person naturally, adapting to their body type and posture. "
-    prompt += f"The lighting and overall image quality should match the original person image. "
-    prompt += f"Pay close attention to how the garment drapes on the body, any visible logos or patterns, "
-    prompt += f"and the interaction between the garment's color and the person's skin tone. "
-    prompt += f"The result should look like a professional photograph, seamlessly blending the person and the new garment."
+    prompt = f"""Create a hyper-realistic image of a person wearing a specific garment, with the following precise details:
+
+Person:
+{person_description}
+
+Garment:
+{garment_description}
+
+Instructions:
+1. Fit: Ensure the garment fits the person's body type perfectly, adapting to their specific proportions and posture.
+2. Lighting: Match the lighting conditions of the original person image exactly.
+3. Color Interaction: Pay special attention to how the garment's color interacts with the person's skin tone.
+4. Texture: Render the fabric texture of the garment with photorealistic detail.
+5. Background: Maintain the original background of the person image.
+6. Pose: Keep the person's pose consistent with the original image.
+7. Shadows and Highlights: Accurately depict how the garment creates shadows and catches highlights on the person's body.
+8. Accessories: If any accessories were mentioned in the person description, include them in the final image.
+9. Seamless Integration: The result should look like a professional photograph where the person is naturally wearing the described garment.
+10. Details: Ensure all specific details mentioned in both descriptions (logos, patterns, facial features, etc.) are clearly visible and accurate.
+
+The final image should be indistinguishable from a high-quality photograph, seamlessly blending the described person and garment.
+"""
 
     return prompt
+
 
 
 # Function to process and cache garment image
@@ -224,8 +238,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
+
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
+        print(f"Generated inpaint prompt:\n{inpaint_prompt}")
 
         loras = []
         for lora in modules.config.default_loras:
@@ -234,7 +249,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         args = [
             True,
             inpaint_prompt,
-            modules.config.default_prompt_negative,
+            "low quality, deformed, unrealistic, pixelated, blur, artificial, fake, exaggerated features, disproportioned body parts",  # Enhanced negative prompt
             False,
             modules.config.default_styles,
             Performance.QUALITY.value,
