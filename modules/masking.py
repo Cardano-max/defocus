@@ -155,6 +155,6 @@ class Masking:
             inpaint_mask[hand_mask > 0] = 0
 
         # Visualize final mask
-        mask_image = inpaint_mask.copy()
+        mask_image = Image.fromarray(inpaint_mask)
         
-        return Image.fromarray(inpaint_mask), Image.fromarray(segmentation_image), Image.fromarray(mask_image)
+        return Image.fromarray(inpaint_mask), Image.fromarray(segmentation_image), mask_image
