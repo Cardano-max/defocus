@@ -3,7 +3,7 @@ import torch
 import cv2
 from PIL import Image, ImageDraw
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
-from Masking.preprocess.openpose.run_openpose import OpenPose
+from preprocess.openpose.run_openpose import OpenPose
 import mediapipe as mp
 
 class Masking:
@@ -12,7 +12,7 @@ class Masking:
         self.model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
         self.openpose = OpenPose(gpu_id=0)
         self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5)
+        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.7)
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -20,46 +20,35 @@ class Masking:
             "bag": 16, "scarf": 17
         }
 
-    def extend_arm_mask(self, wrist, elbow, scale):
-        return elbow + scale * (wrist - elbow)
-
-    def hole_fill(self, img):
-        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
-        img_copy = img.copy()
-        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-        cv2.floodFill(img, mask, (0, 0), 255)
-        img_inverse = cv2.bitwise_not(img)
-        return cv2.bitwise_or(img_copy, img_inverse)
-
-    def refine_mask(self, mask):
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_L1)
-        area = [abs(cv2.contourArea(contour, True)) for contour in contours]
-        if area:
-            max_idx = area.index(max(area))
-            refined_mask = np.zeros_like(mask).astype(np.uint8)
-            cv2.drawContours(refined_mask, contours, max_idx, color=255, thickness=-1)
-            return refined_mask
-        return mask
-
     def detect_hands(self, image):
         results = self.hands.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        hand_masks = []
+        hand_masks = np.zeros(image.shape[:2], dtype=np.uint8)
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
                 landmarks = [[int(lm.x * image.shape[1]), int(lm.y * image.shape[0])] for lm in hand_landmarks.landmark]
                 hull = cv2.convexHull(np.array(landmarks))
-                cv2.fillConvexPoly(hand_mask, hull, 255)
-                hand_masks.append(hand_mask)
+                cv2.fillConvexPoly(hand_masks, hull, 255)
         return hand_masks
 
+    def get_pose_mask(self, pose_data, shape):
+        pose_mask = np.zeros(shape, dtype=np.uint8)
+        connections = [
+            (0, 1), (1, 2), (2, 3), (3, 4),  # Right arm
+            (1, 5), (5, 6), (6, 7),  # Left arm
+            (1, 8), (8, 9), (9, 10),  # Right leg
+            (1, 11), (11, 12), (12, 13)  # Left leg
+        ]
+        for connection in connections:
+            start_point = tuple(map(int, pose_data[connection[0]]))
+            end_point = tuple(map(int, pose_data[connection[1]]))
+            cv2.line(pose_mask, start_point, end_point, 255, thickness=10)
+        return pose_mask
+
     def get_mask(self, image, category='upper_body', width=384, height=512):
-        # Ensure image is in RGB mode
-        image = image.convert('RGB')
-        
-        # Resize image
-        image = image.resize((width, height), Image.NEAREST)
-        
+        # Ensure image is in RGB mode and resize
+        image = image.convert('RGB').resize((width, height), Image.NEAREST)
+        np_image = np.array(image)
+
         # Get segmentation
         inputs = self.processor(images=image, return_tensors="pt")
         outputs = self.model(**inputs)
@@ -73,75 +62,41 @@ class Masking:
         parse_array = upsampled_logits.argmax(dim=1)[0].numpy()
 
         # Get pose estimation
-        keypoints = self.openpose(np.array(image))
+        keypoints = self.openpose(np_image)
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
+        pose_mask = self.get_pose_mask(pose_data, (height, width))
 
         # Detect hands
-        hand_masks = self.detect_hands(np.array(image))
+        hand_mask = self.detect_hands(np_image)
 
-        # Create masks
-        parse_head = ((parse_array == 1) | (parse_array == 3) | (parse_array == 11)).astype(np.float32)
-        parser_mask_fixed = ((parse_array == self.label_map["left_shoe"]) |
-                             (parse_array == self.label_map["right_shoe"]) |
-                             (parse_array == self.label_map["hat"]) |
-                             (parse_array == self.label_map["sunglasses"]) |
-                             (parse_array == self.label_map["bag"])).astype(np.float32)
-        parser_mask_changeable = (parse_array == self.label_map["background"]).astype(np.float32)
-
+        # Create initial mask based on category
         if category == 'upper_body':
-            parse_mask = ((parse_array == 4) | (parse_array == 7)).astype(np.float32)
-            parser_mask_fixed_lower = ((parse_array == self.label_map["skirt"]) |
-                                       (parse_array == self.label_map["pants"])).astype(np.float32)
-            parser_mask_fixed += parser_mask_fixed_lower
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
+            initial_mask = ((parse_array == 4) | (parse_array == 7)).astype(np.uint8) * 255
         elif category == 'lower_body':
-            parse_mask = ((parse_array == 6) | (parse_array == 12) |
-                          (parse_array == 13) | (parse_array == 5)).astype(np.float32)
-            parser_mask_fixed += ((parse_array == self.label_map["upper_clothes"]) |
-                                  (parse_array == 14) | (parse_array == 15)).astype(np.float32)
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
+            initial_mask = ((parse_array == 6) | (parse_array == 12) | 
+                            (parse_array == 13) | (parse_array == 5)).astype(np.uint8) * 255
         elif category == 'dresses':
-            parse_mask = ((parse_array == 7) | (parse_array == 4) |
-                          (parse_array == 5) | (parse_array == 6)).astype(np.float32)
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
+            initial_mask = ((parse_array == 7) | (parse_array == 4) | 
+                            (parse_array == 5) | (parse_array == 6)).astype(np.uint8) * 255
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Process arms
-        arm_width = int(0.15 * width)  # Adjust arm width based on image width
-        im_arms = Image.new('L', (width, height))
-        arms_draw = ImageDraw.Draw(im_arms)
+        # Combine initial mask with pose mask
+        combined_mask = cv2.bitwise_or(initial_mask, pose_mask)
 
-        if category in ['dresses', 'upper_body']:
-            for side in ['right', 'left']:
-                shoulder = pose_data[2 if side == 'right' else 5]
-                elbow = pose_data[3 if side == 'right' else 6]
-                wrist = pose_data[4 if side == 'right' else 7]
+        # Dilate the combined mask
+        kernel = np.ones((5,5), np.uint8)
+        dilated_mask = cv2.dilate(combined_mask, kernel, iterations=3)
 
-                if wrist[0] > 1 and wrist[1] > 1:
-                    wrist = self.extend_arm_mask(wrist, elbow, 1.2)
-                    arms_draw.line(np.concatenate((shoulder, elbow, wrist)).astype(np.uint16).tolist(),
-                                   fill='white', width=arm_width, joint='curve')
-                    arms_draw.ellipse([shoulder[0] - arm_width // 2, shoulder[1] - arm_width // 2,
-                                       shoulder[0] + arm_width // 2, shoulder[1] + arm_width // 2],
-                                      fill='white')
+        # Remove hand areas from the dilated mask
+        final_mask = cv2.bitwise_and(dilated_mask, cv2.bitwise_not(hand_mask))
 
-        arm_mask = np.array(im_arms) / 255.0
-        parse_mask = np.logical_or(parse_mask, arm_mask).astype(np.float32)
+        # Refine the mask
+        contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        refined_mask = np.zeros_like(final_mask)
+        cv2.drawContours(refined_mask, contours, -1, 255, thickness=cv2.FILLED)
 
-        # Final mask processing
-        parse_mask = cv2.dilate(parse_mask, np.ones((5, 5), np.uint16), iterations=5)
-        neck_mask = (parse_array == 18).astype(np.float32)
-        neck_mask = cv2.dilate(neck_mask, np.ones((5, 5), np.uint16), iterations=1)
-        neck_mask = np.logical_and(neck_mask, np.logical_not(parse_head))
-        parse_mask = np.logical_or(parse_mask, neck_mask)
-
-        inpaint_mask = 1 - (parser_mask_changeable | parse_mask | parser_mask_fixed)
-        inpaint_mask = self.hole_fill((inpaint_mask * 255).astype(np.uint8))
-        inpaint_mask = self.refine_mask(inpaint_mask)
-
-        # Unmask hands
-        for hand_mask in hand_masks:
-            inpaint_mask[hand_mask > 0] = 0
+        # Invert the mask for inpainting (white areas will be inpainted)
+        inpaint_mask = cv2.bitwise_not(refined_mask)
 
         return Image.fromarray(inpaint_mask)

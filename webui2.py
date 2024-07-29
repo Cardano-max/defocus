@@ -225,8 +225,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
             "Lower Body": "lower_body",
             "Full Body": "dresses"
         }
-        print(f"Category Input: {category_input}")
-        
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
