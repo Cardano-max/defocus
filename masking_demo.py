@@ -96,7 +96,7 @@ class Masking:
 if __name__ == "__main__":
     masker = Masking()
     input_dir = "TEST"
-    output_dir = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST"
+    output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/images"
     
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
