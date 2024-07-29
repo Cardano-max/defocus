@@ -241,7 +241,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
         mask_image_path = os.path.join(modules.config.path_outputs, f"mask_{int(time.time())}.png")
         mask_image.save(mask_image_path)
 
-
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
 
@@ -249,12 +248,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_aspect_ratio = orig_person_h / orig_person_w
 
         # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 512
+        target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
         # Ensure target height is also 1024 at maximum
-        if target_height > 512:
-            target_height = 512
+        if target_height > 1024:
+            target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
@@ -263,23 +262,6 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
-
-        # Display and save the mask
-        plt.figure(figsize=(10, 10))
-        plt.imshow(inpaint_mask, cmap='gray')
-        plt.axis('off')
-        
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        buf.seek(0)
-        
-        masked_image_path = os.path.join(modules.config.path_outputs, f"masked_image_{int(time.time())}.png")
-        with open(masked_image_path, 'wb') as f:
-            f.write(buf.getvalue())
-        
-        plt.close()
-
-        os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
         # Generate dynamic inpaint prompt
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
@@ -371,22 +353,22 @@ def virtual_try_on(clothes_image, person_image, category_input):
             time.sleep(0.1)
 
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {
-                "success": True, 
-                "image_path": task.results[0], 
-                "masked_image_path": masked_image_path, 
-                "person_image_path": person_image_path,
-                "segmentation_image_path": segmentation_image_path,
-                "mask_image_path": mask_image_path
-            }
-        else:
-            return {"success": False, "error": "No results generated"}
+                    return {
+                        "success": True, 
+                        "image_path": task.results[0], 
+                        "masked_image_path": mask_image_path, 
+                        "person_image_path": person_image_path,
+                        "segmentation_image_path": segmentation_image_path,
+                        "mask_image_path": mask_image_path
+                    }
+                else:
+                    return {"success": False, "error": "No results generated"}
 
-    except Exception as e:
-        print(f"Error in virtual_try_on: {str(e)}")
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
-        
+            except Exception as e:
+                print(f"Error in virtual_try_on: {str(e)}")
+                traceback.print_exc()
+                return {"success": False, "error": str(e)}
+
 example_garments = [
     "images/b2.jpeg",
     "images/b4.jpeg",
@@ -884,7 +866,17 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
             queue_update_event.clear()
             current_position = max(0, task_queue.qsize() - 1)
 
-        if generation_result['success']:
+        if generation_result is None:
+            yield {
+                loading_indicator: gr.update(visible=False),
+                status_info: gr.update(visible=False),
+                masked_output: gr.update(visible=False),
+                try_on_output: gr.update(visible=False),
+                image_link: gr.update(visible=False),
+                error_output: gr.update(value=f"<p>{random.choice(error_messages)}</p><p>Remember, we're still in beta. We appreciate your understanding as we work to improve our service.</p>", visible=True),
+                queue_note: gr.update(visible=True)
+            }
+        elif generation_result['success']:
             generated_image_path = generation_result['image_path']
             masked_image_path = generation_result['masked_image_path']
             person_image_path = generation_result['person_image_path']
@@ -939,6 +931,7 @@ with gr.Blocks(css=css, theme=gr.themes.Base()) as demo:
                 feedback_row: gr.update(visible=False)
             }
 
+    # In the main Gradio interface setup
     try_on_button.click(
         process_virtual_try_on,
         inputs=[clothes_input, person_input, category_input],

@@ -1,3 +1,5 @@
+# Masking/masking.py
+
 import numpy as np
 import torch
 import cv2
@@ -5,7 +7,6 @@ from PIL import Image, ImageDraw
 from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
 from Masking.preprocess.openpose.run_openpose import OpenPose
 import mediapipe as mp
-import matplotlib.pyplot as plt
 
 class Masking:
     def __init__(self):
@@ -155,6 +156,6 @@ class Masking:
             inpaint_mask[hand_mask > 0] = 0
 
         # Visualize final mask
-        mask_image = Image.fromarray(inpaint_mask)
+        mask_image = inpaint_mask.copy()
         
-        return Image.fromarray(inpaint_mask), Image.fromarray(segmentation_image), mask_image
+        return Image.fromarray(inpaint_mask), Image.fromarray(segmentation_image), Image.fromarray(mask_image)
