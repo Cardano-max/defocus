@@ -4,6 +4,7 @@ import requests
 import base64
 from PIL import Image
 import io
+import json
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
@@ -26,12 +27,20 @@ def analyze_image(image, prompt):
     payload = {
         "model": "bakllava",
         "prompt": prompt,
+        "stream": False,
         "images": [base64_image]
     }
 
     response = requests.post(OLLAMA_API_URL, json=payload)
     if response.status_code == 200:
-        return response.json()['response']
+        # Parse the response carefully
+        response_text = response.text.strip()
+        try:
+            response_json = json.loads(response_text)
+            return response_json.get('response', '')
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return the raw text
+            return response_text
     else:
         raise Exception(f"Error: {response.status_code}, {response.text}")
 
