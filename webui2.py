@@ -157,7 +157,7 @@ def process_and_cache_garment(garment_image):
             return garment_cache[garment_hash]
     
     # Processing the garment image (resize, etc.)
-    processed_garment = resize_image(HWC3(garment_image), 512, 512)
+    processed_garment = resize_image(HWC3(garment_image), 256, 256)
     
     with garment_cache_lock:
         garment_cache[garment_hash] = processed_garment
