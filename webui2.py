@@ -238,12 +238,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         person_aspect_ratio = orig_person_h / orig_person_w
 
         # Set target width and calculate corresponding height to maintain aspect ratio
-        target_width = 512
+        target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
         # Ensure target height is also 1024 at maximum
-        if target_height > 512:
-            target_height = 512
+        if target_height > 1024:
+            target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
         # Resize images while preserving aspect ratio
