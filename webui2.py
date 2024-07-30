@@ -219,8 +219,8 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        print(f"Generated inpaint prompt: {inpaint_prompt}")
+        # inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
+        # print(f"Generated inpaint prompt: {inpaint_prompt}")
 
         loras = []
         for lora in modules.config.default_loras:
