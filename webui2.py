@@ -296,7 +296,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            "inpaint",
+            "wearing a new garment",
             inpaint_mask,
             True,
             True,
