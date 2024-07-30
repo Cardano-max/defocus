@@ -116,7 +116,7 @@ class Masking:
 
 if __name__ == "__main__":
     image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    input_image = os.path.join(image_folder, "mota.jpg")  # Replace "input_image.jpg" with your actual image file name
+    input_image = os.path.join(image_folder, "no.png")  # Replace "input_image.jpg" with your actual image file name
     output_image = os.path.join(image_folder, "output_mask.png")
     category = "dresses"  # Change this to "lower_body" or "dresses" as needed
     
