@@ -148,5 +148,3 @@ if __name__ == "__main__":
     # # Save the output mask image
     # output_img = Image.fromarray(mask)
     # output_img.save(output_image)
-    
-    # print(f"Mask saved to {output_image}")
