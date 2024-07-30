@@ -129,5 +129,3 @@ class Masking:
         img_inverse = cv2.bitwise_not(img)
         dst = cv2.bitwise_or(img_copy, img_inverse)
         return dst
-
-if __name__ == "__main__":
