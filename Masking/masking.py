@@ -1,122 +1,111 @@
+# Masking/masking.py
+
 import numpy as np
-import torch
 import cv2
-from PIL import Image, ImageDraw
-from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation
-from preprocess.openpose.run_openpose import OpenPose
+from PIL import Image
+import mediapipe as mp
+from functools import wraps
+from time import time
+
+def timing(f):
+    @wraps(f)
+    def wrap(*args, **kw):
+        ts = time()
+        result = f(*args, **kw)
+        te = time()
+        print('func:%r args:[%r, %r] took: %2.4f sec' % \
+          (f.__name__, args, kw, te-ts))
+        return result
+    return wrap
 
 class Masking:
     def __init__(self):
-        self.processor = SegformerImageProcessor.from_pretrained("sayeed99/segformer_b3_clothes")
-        self.model = AutoModelForSemanticSegmentation.from_pretrained("sayeed99/segformer_b3_clothes")
-        self.openpose = OpenPose(gpu_id=0)  # Assuming GPU 0, adjust as needed
-        self.label_map = {
-            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
-            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
-            "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
-            "bag": 16, "scarf": 17
-        }
+        self.mp_hands = mp.solutions.hands
+        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.7)
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(static_image_mode=True, model_complexity=2, min_detection_confidence=0.5)
 
-    def extend_arm_mask(self, wrist, elbow, scale):
-        return elbow + scale * (wrist - elbow)
+    @timing
+    def get_mask(self, img, category='upper_body'):
+        # Convert PIL Image to numpy array
+        img_np = np.array(img)
+        
+        # Get hand mask
+        hand_mask = self.get_hand_mask(img_np)
+        
+        # Get body mask based on category
+        body_mask = self.get_body_mask(img_np, category)
+        
+        # Combine masks
+        combined_mask = cv2.bitwise_or(hand_mask, body_mask)
+        
+        # Refine the mask
+        refined_mask = self.refine_mask(combined_mask)
+        
+        return refined_mask
 
-    def hole_fill(self, img):
-        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
-        img_copy = img.copy()
-        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-        cv2.floodFill(img, mask, (0, 0), 255)
-        img_inverse = cv2.bitwise_not(img)
-        return cv2.bitwise_or(img_copy, img_inverse)
-
-    def refine_mask(self, mask):
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_L1)
-        area = [abs(cv2.contourArea(contour, True)) for contour in contours]
-        if area:
-            max_idx = area.index(max(area))
-            refined_mask = np.zeros_like(mask).astype(np.uint8)
-            cv2.drawContours(refined_mask, contours, max_idx, color=255, thickness=-1)
-            return refined_mask
+    def get_hand_mask(self, image):
+        height, width, _ = image.shape
+        mask = np.zeros((height, width), dtype=np.uint8)
+        
+        # Convert the BGR image to RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(image_rgb)
+        
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                for landmark in hand_landmarks.landmark:
+                    x, y = int(landmark.x * width), int(landmark.y * height)
+                    cv2.circle(mask, (x, y), 15, 255, -1)
+        
+        # Dilate the mask to create a more generous hand area
+        kernel = np.ones((20, 20), np.uint8)
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        
         return mask
 
-    def get_mask(self, image, category='upper_body', width=384, height=512):
-        # Resize image
-        image = image.resize((width, height), Image.NEAREST)
+    def get_body_mask(self, image, category):
+        height, width, _ = image.shape
+        mask = np.zeros((height, width), dtype=np.uint8)
         
-        # Get segmentation
-        inputs = self.processor(images=image, return_tensors="pt")
-        outputs = self.model(**inputs)
-        logits = outputs.logits.cpu()
-        upsampled_logits = torch.nn.functional.interpolate(
-            logits,
-            size=image.size[::-1],
-            mode="bilinear",
-            align_corners=False,
-        )
-        parse_array = upsampled_logits.argmax(dim=1)[0].numpy()
+        # Convert the BGR image to RGB
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(image_rgb)
+        
+        if results.pose_landmarks:
+            landmarks = results.pose_landmarks.landmark
+            
+            if category == 'upper_body':
+                body_parts = [11, 12, 23, 24]  # Shoulders and hips
+            elif category == 'lower_body':
+                body_parts = [23, 24, 25, 26, 27, 28]  # Hips, knees, and ankles
+            elif category == 'dresses':
+                body_parts = [11, 12, 23, 24, 25, 26, 27, 28]  # Full body
+            else:
+                raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
+            
+            points = []
+            for i in body_parts:
+                x, y = int(landmarks[i].x * width), int(landmarks[i].y * height)
+                points.append((x, y))
+            
+            cv2.fillPoly(mask, [np.array(points)], 255)
+        
+        return mask
 
-        # Get pose estimation
-        keypoints = self.openpose(np.array(image))
-        pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
-
-        # Create masks
-        parse_head = ((parse_array == 1) | (parse_array == 3) | (parse_array == 11)).astype(np.float32)
-        parser_mask_fixed = ((parse_array == self.label_map["left_shoe"]) |
-                             (parse_array == self.label_map["right_shoe"]) |
-                             (parse_array == self.label_map["hat"]) |
-                             (parse_array == self.label_map["sunglasses"]) |
-                             (parse_array == self.label_map["bag"])).astype(np.float32)
-        parser_mask_changeable = (parse_array == self.label_map["background"]).astype(np.float32)
-
-        if category == 'upper_body':
-            parse_mask = ((parse_array == 4) | (parse_array == 7)).astype(np.float32)
-            parser_mask_fixed_lower = ((parse_array == self.label_map["skirt"]) |
-                                       (parse_array == self.label_map["pants"])).astype(np.float32)
-            parser_mask_fixed += parser_mask_fixed_lower
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
-        elif category == 'lower_body':
-            parse_mask = ((parse_array == 6) | (parse_array == 12) |
-                          (parse_array == 13) | (parse_array == 5)).astype(np.float32)
-            parser_mask_fixed += ((parse_array == self.label_map["upper_clothes"]) |
-                                  (parse_array == 14) | (parse_array == 15)).astype(np.float32)
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
-        elif category == 'dresses':
-            parse_mask = ((parse_array == 7) | (parse_array == 4) |
-                          (parse_array == 5) | (parse_array == 6)).astype(np.float32)
-            parser_mask_changeable |= ~(parser_mask_fixed | parse_mask)
+    def refine_mask(self, mask):
+        # Apply morphological operations to smooth the mask
+        kernel = np.ones((5,5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours and keep only the largest one
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            mask_refined = np.zeros_like(mask)
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, -1)
         else:
-            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
-
-        # Process arms
-        arm_width = 45  # Adjust as needed
-        im_arms = Image.new('L', (width, height))
-        arms_draw = ImageDraw.Draw(im_arms)
-
-        if category in ['dresses', 'upper_body']:
-            for side in ['right', 'left']:
-                shoulder = pose_data[2 if side == 'right' else 5]
-                elbow = pose_data[3 if side == 'right' else 6]
-                wrist = pose_data[4 if side == 'right' else 7]
-
-                if wrist[0] > 1 and wrist[1] > 1:
-                    wrist = self.extend_arm_mask(wrist, elbow, 1.2)
-                    arms_draw.line(np.concatenate((shoulder, elbow, wrist)).astype(np.uint16).tolist(),
-                                   fill='white', width=arm_width, joint='curve')
-                    arms_draw.ellipse([shoulder[0] - arm_width // 2, shoulder[1] - arm_width // 2,
-                                       shoulder[0] + arm_width // 2, shoulder[1] + arm_width // 2],
-                                      fill='white')
-
-        arm_mask = np.array(im_arms) / 255.0
-        parse_mask = np.logical_or(parse_mask, arm_mask).astype(np.float32)
-
-        # Final mask processing
-        parse_mask = cv2.dilate(parse_mask, np.ones((5, 5), np.uint16), iterations=5)
-        neck_mask = (parse_array == 18).astype(np.float32)
-        neck_mask = cv2.dilate(neck_mask, np.ones((5, 5), np.uint16), iterations=1)
-        neck_mask = np.logical_and(neck_mask, np.logical_not(parse_head))
-        parse_mask = np.logical_or(parse_mask, neck_mask)
-
-        inpaint_mask = 1 - (parser_mask_changeable | parse_mask | parser_mask_fixed)
-        inpaint_mask = self.hole_fill(inpaint_mask.astype(np.uint8) * 255)
-        inpaint_mask = self.refine_mask(inpaint_mask)
-
-        return Image.fromarray(inpaint_mask)
+            mask_refined = mask
+        
+        return mask_refined
