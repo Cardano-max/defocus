@@ -21,6 +21,7 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import mediapipe as mp
 
 
 ###########
@@ -221,7 +222,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
-        # Generate mask
+        # Generate mask using the updated Masking class
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
         # Get the original dimensions
