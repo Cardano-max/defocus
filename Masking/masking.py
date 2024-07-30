@@ -131,20 +131,3 @@ class Masking:
         return dst
 
 if __name__ == "__main__":
-    # import os
-    
-    # masker = Masking()
-    # image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    # input_image = os.path.join(image_folder, "no.png")  # Replace with your actual image file name
-    # output_image = os.path.join(image_folder, "output_mask.png")
-    # category = "dresses"  # Change this to "lower_body" or "upper_body" as needed
-    
-    # # Load the input image
-    # input_img = Image.open(input_image)
-    
-    # # Get the mask
-    # mask = masker.get_mask(input_img, category=category)
-    
-    # # Save the output mask image
-    # output_img = Image.fromarray(mask)
-    # output_img.save(output_image)
