@@ -111,7 +111,7 @@ if __name__ == "__main__":
     password = "arbisoft042"
 
     # Remote and local paths
-    remote_image_path = "TEST/mota.jpg"
+    remote_image_path = "arbi-tryon/TEST/mota.jpg"
     local_output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST/"
 
     # Create SSH client
