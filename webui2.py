@@ -186,6 +186,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
+        masker = Masking()
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
         orig_person_h, orig_person_w = person_image.shape[:2]
@@ -199,7 +200,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             target_width = int(target_height / person_aspect_ratio)
 
         person_image = resize_image(HWC3(person_image), target_width, target_height)
-        inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
+        inpaint_mask = cv2.resize(inpaint_mask, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
 
         aspect_ratio = f"{target_width}×{target_height}"
 
