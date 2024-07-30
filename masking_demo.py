@@ -6,6 +6,8 @@ from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 import paramiko
 import io
+import traceback
+
 
 class Masking:
     def __init__(self):
@@ -145,6 +147,7 @@ if __name__ == "__main__":
 
     except Exception as e:
         print(f"An error occurred: {str(e)}")
+        traceback.print_exc()
 
     finally:
         # Close the SFTP and SSH connections
