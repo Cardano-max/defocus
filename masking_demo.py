@@ -4,6 +4,8 @@ import os
 from PIL import Image
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
+import paramiko
+import io
 
 class Masking:
     def __init__(self):
@@ -93,23 +95,58 @@ class Masking:
         
         return mask_refined > 0  # Convert back to boolean mask
 
+def transfer_file(local_path, remote_path, sftp):
+    try:
+        sftp.put(local_path, remote_path)
+        print(f"File transferred successfully to {remote_path}")
+    except Exception as e:
+        print(f"Error transferring file: {str(e)}")
+
 if __name__ == "__main__":
-    masker = Masking()
-    human_img = Image.open("arbi-tryon/TEST/WhatsApp Image 2024-07-30 at 03.04.05.jpeg").convert('RGB')
-    mask = masker.get_mask(human_img, category='upper_body')
-    
-    # Convert the mask to OpenCV format
-    mask_cv2 = cv2.cvtColor(np.array(mask, dtype=np.uint8), cv2.COLOR_GRAY2BGR)
-    
-    # Create a masked image by applying the mask to the original image
-    masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
-    
-    # Specify the output directory
-    output_dir = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST"
-    
-    # Create the output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save the mask and masked image in the specified directory
-    cv2.imwrite(os.path.join(output_dir, "output_mask.png"), mask_cv2)
-    cv2.imwrite(os.path.join(output_dir, "output_masked_image.png"), masked_image)
+    # SSH connection details
+    hostname = "172.30.1.80"
+    username = "ikramali"
+    password = "arbisoft042"
+
+    # Remote and local paths
+    remote_image_path = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST/mota.jpg"
+    local_output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST/"
+
+    # Create SSH client
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(hostname, username=username, password=password)
+
+    # Create SFTP client
+    sftp = ssh.open_sftp()
+
+    try:
+        # Download the image from remote to local memory
+        with sftp.open(remote_image_path, 'rb') as remote_file:
+            image_data = remote_file.read()
+        
+        # Process the image
+        human_img = Image.open(io.BytesIO(image_data)).convert('RGB')
+        
+        masker = Masking()
+        mask = masker.get_mask(human_img, category='upper_body')
+        
+        # Convert the mask to OpenCV format
+        mask_cv2 = cv2.cvtColor(np.array(mask, dtype=np.uint8), cv2.COLOR_GRAY2BGR)
+        
+        # Create a masked image by applying the mask to the original image
+        masked_image = cv2.bitwise_and(cv2.cvtColor(np.array(human_img), cv2.COLOR_RGB2BGR), mask_cv2)
+        
+        # Save the mask and masked image locally
+        cv2.imwrite(os.path.join(local_output_dir, "output_mask.png"), mask_cv2)
+        cv2.imwrite(os.path.join(local_output_dir, "output_masked_image.png"), masked_image)
+        
+        print(f"Mask and masked image saved in {local_output_dir}")
+
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+
+    finally:
+        # Close the SFTP and SSH connections
+        sftp.close()
+        ssh.close()
