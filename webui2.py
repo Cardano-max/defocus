@@ -1,23 +1,16 @@
-# webui2.py
-
-import gradio as gr
+mport gradio as gr
 import random
 import time
 import traceback
 import sys
 import os
 import numpy as np
-import modules.config
-import modules.async_worker as worker
-import modules.constants as constants
-import modules.flags as flags
-from modules.util import HWC3, resize_image, generate_temp_filename
-from modules.private_logger import get_current_html_path, log
-import json
+import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
-from modules.flags import Performance
+import cv2
+from transformers import CLIPModel, CLIPProcessor
 from queue import Queue
 from threading import Lock, Event, Thread
 import base64
@@ -28,12 +21,10 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from bakllava_analyzer import analyze_person, analyze_garment
+
 
 ###########
 
-# webui2.py
-
 import gradio as gr
 import random
 import time
@@ -48,9 +39,12 @@ import modules.flags as flags
 from modules.util import HWC3, resize_image, generate_temp_filename
 from modules.private_logger import get_current_html_path, log
 import json
+import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 import io
+import cv2
+from transformers import SegformerImageProcessor, AutoModelForSemanticSegmentation, CLIPProcessor, CLIPModel
 from modules.flags import Performance
 from queue import Queue
 from threading import Lock, Event, Thread
@@ -62,7 +56,10 @@ from Masking.masking import Masking
 from modules.image_restoration import restore_image
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from bakllava_analyzer import analyze_person, analyze_garment
+
+# Load CLIP model for image analysis
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 def image_to_base64(img_path):
     with open(img_path, "rb") as image_file:
@@ -83,6 +80,7 @@ def custom_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = custom_exception_handler
 
+# Initialize Masker
 masker = Masking()
 
 # Initialize queue and locks
@@ -95,17 +93,50 @@ queue_update_event = Event()
 garment_cache = {}
 garment_cache_lock = Lock()
 
-def generate_inpaint_prompt(garment_image, person_image):
-    person_description = analyze_person(Image.fromarray(person_image))
-    garment_description = analyze_garment(Image.fromarray(garment_image))
+def analyze_image(image):
+    # Convert numpy array to PIL Image
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
     
-    prompt = f"Create a hyper-realistic image of a person wearing a specific garment. Here are the details:\n\n"
-    prompt += f"Person description: {person_description}\n\n"
-    prompt += f"Garment description: {garment_description}\n\n"
+    # Prepare image for CLIP
+    inputs = clip_processor(images=image, return_tensors="pt", padding=True, truncation=True)
+    
+    # Get image features
+    with torch.no_grad():
+        image_features = clip_model.get_image_features(**inputs)
+    
+    # Use CLIP to get the most relevant labels
+    candidate_labels = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "black", "white",
+                        "shirt", "t-shirt", "dress", "pants", "jeans", "skirt", "jacket", "coat", "sweater",
+                        "small", "medium", "large", "slim fit", "loose fit", "formal", "casual", "sporty",
+                        "patterned", "striped", "plain", "v-neck", "round neck", "collared", "short-sleeved", "long-sleeved"]
+    
+    text_inputs = clip_processor(text=candidate_labels, return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        text_features = clip_model.get_text_features(**text_inputs)
+    
+    # Calculate similarities
+    similarities = (image_features @ text_features.T).squeeze(0)
+    
+    # Get top 5 most similar labels
+    top_5_indices = similarities.argsort(descending=True)[:5]
+    top_5_labels = [candidate_labels[i] for i in top_5_indices]
+    
+    return top_5_labels
 
-
+def generate_inpaint_prompt(garment_image, person_image):
+    garment_labels = analyze_image(garment_image)
+    person_labels = analyze_image(person_image)
+    
+    garment_description = ", ".join(garment_labels)
+    person_description = ", ".join(person_labels)
+    
+    prompt = f"Dress the person in a {garment_description} garment. The person appears to be {person_description}. "
+    prompt += f"Ensure the fit is appropriate and the style matches the garment description. "
+    prompt += f"Pay attention to details such as neckline, sleeves, and overall fit. "
+    prompt += f"Maintain the person's pose and body proportions while naturally integrating the new garment."
+    
     return prompt
-
 
 # Function to process and cache garment image
 def process_and_cache_garment(garment_image):
@@ -155,23 +186,27 @@ def check_image_quality(image):
     resolution = width * height
     
     # Define a threshold for low resolution (e.g., less than 512x512)
-    threshold = 100 * 100
+    threshold = 512 * 512
     
     return resolution >= threshold
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
+        # Process and cache the garment image
         processed_clothes = process_and_cache_garment(clothes_image)
 
+        # Check person image quality and restore if necessary
         if not check_image_quality(person_image):
             print("Low resolution person image detected. Restoring...")
             person_image = restore_image(person_image)
 
+        # Convert person_image to PIL Image if it's not already
         if not isinstance(person_image, Image.Image):
             person_pil = Image.fromarray(person_image)
         else:
             person_pil = person_image
 
+        # Save the user-uploaded person image
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
@@ -186,23 +221,32 @@ def virtual_try_on(clothes_image, person_image, category_input):
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
+        # Generate mask
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
+        # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
+
+        # Calculate the aspect ratio of the person image
         person_aspect_ratio = orig_person_h / orig_person_w
 
+        # Set target width and calculate corresponding height to maintain aspect ratio
         target_width = 1024
         target_height = int(target_width * person_aspect_ratio)
 
+        # Ensure target height is also 1024 at maximum
         if target_height > 1024:
             target_height = 1024
             target_width = int(target_height / person_aspect_ratio)
 
+        # Resize images while preserving aspect ratio
         person_image = resize_image(HWC3(person_image), target_width, target_height)
         inpaint_mask = resize_image(HWC3(inpaint_mask), target_width, target_height)
 
+        # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
+        # Display and save the mask
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -219,9 +263,11 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
-        # print(f"Generated inpaint prompt: {inpaint_prompt}")
+        # Generate dynamic inpaint prompt
+        inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
+        print(f"Generated inpaint prompt: {inpaint_prompt}")
 
+        # Define loras here
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
@@ -249,7 +295,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
             None,
             [],
             {'image': person_image, 'mask': inpaint_mask},
-            'wearing a new garment',
+            "inpaint",
             inpaint_mask,
             True,
             True,
