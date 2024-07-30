@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     # Remote and local paths
     remote_image_path = "arbi-tryon/TEST/mota.jpg"
-    local_output_dir = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST/"
+    local_output_dir = "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST"
 
     # Create SSH client
     ssh = paramiko.SSHClient()
