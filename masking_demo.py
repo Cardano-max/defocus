@@ -129,17 +129,17 @@ class Masking:
         return np.clip(mask_blurred, 0, 1)
 
     def create_masked_output(self, image, mask):
-    # If the image has an alpha channel, remove it
-    if image.shape[-1] == 4:
-        image = image[..., :3]
+        # If the image has an alpha channel, remove it
+        if image.shape[-1] == 4:
+            image = image[..., :3]
 
-    # Create a 3-channel mask
-    mask_3channel = np.stack([mask] * 3, axis=-1)
+        # Create a 3-channel mask
+        mask_3channel = np.stack([mask] * 3, axis=-1)
 
-    # Apply the mask to the image
-    masked_output = (image * mask_3channel).astype(np.uint8)
+        # Apply the mask to the image
+        masked_output = (image * mask_3channel).astype(np.uint8)
 
-    return masked_output
+        return masked_output
 
     @staticmethod
     def extend_arm_mask(wrist, elbow, scale):
