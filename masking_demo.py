@@ -86,6 +86,9 @@ class Masking:
         masked_output_pil = Image.fromarray(masked_output)
         masked_output_pil_resized = masked_output_pil.resize(original_size, Image.LANCZOS)
         
+        print("Mask shape:", np.array(mask_pil_resized).shape)
+        print("Masked output shape:", np.array(masked_output_pil_resized).shape)
+        
         return np.array(mask_pil_resized), np.array(masked_output_pil_resized)
 
     def create_hand_mask(self, image):
