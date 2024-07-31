@@ -84,5 +84,5 @@ class GarmentFitter:
 # Usage
 if __name__ == "__main__":
     fitter = GarmentFitter()
-    result = fitter.fit_garment("/Users/ateeb.taseer/arbi_tryon/arbi-tryon/TEST/mota.jpg", "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/images/b9.png")
+    result = fitter.fit_garment("TEST/mota.jpg", "images/b9.png")
     fitter.save_result(result, "/Users/ateeb.taseer/arbi_tryon/arbi-tryon/images")
