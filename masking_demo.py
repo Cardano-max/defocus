@@ -3,7 +3,6 @@ import cv2
 from PIL import Image
 from functools import wraps
 from time import time
-import os
 
 def timing(f):
     @wraps(f)
@@ -58,7 +57,10 @@ class Masking:
         
         return mask
 
-    def apply_smooth_transition(self, mask, blur_radius=30, transition_width=20):
+    def apply_smooth_transition(self, mask, blur_radius=31, transition_width=20):
+        # Ensure blur_radius is odd
+        blur_radius = blur_radius if blur_radius % 2 == 1 else blur_radius + 1
+        
         # Create a copy of the mask
         smooth_mask = mask.copy().astype(np.float32)
         
@@ -66,17 +68,18 @@ class Masking:
         blurred = cv2.GaussianBlur(smooth_mask, (blur_radius, blur_radius), 0)
         
         # Create a transition mask
-        transition_mask = np.zeros_like(smooth_mask)
-        transition_mask = cv2.dilate(smooth_mask, np.ones((transition_width, transition_width), np.uint8)) - \
-                          cv2.erode(smooth_mask, np.ones((transition_width, transition_width), np.uint8))
+        kernel = np.ones((transition_width, transition_width), np.uint8)
+        dilated = cv2.dilate(smooth_mask, kernel, iterations=1)
+        eroded = cv2.erode(smooth_mask, kernel, iterations=1)
+        transition_mask = dilated - eroded
         
         # Apply the transition
-        smooth_mask = np.where(transition_mask == 255, blurred, smooth_mask)
+        smooth_mask = np.where(transition_mask > 0, blurred, smooth_mask)
         
         # Normalize to 0-255 range
-        smooth_mask = ((smooth_mask - smooth_mask.min()) / (smooth_mask.max() - smooth_mask.min()) * 255).astype(np.uint8)
+        smooth_mask = cv2.normalize(smooth_mask, None, 0, 255, cv2.NORM_MINMAX)
         
-        return smooth_mask
+        return smooth_mask.astype(np.uint8)
 
     def create_masked_output(self, image, mask):
         # Ensure mask is binary
@@ -95,7 +98,7 @@ if __name__ == "__main__":
     input_image = os.path.join(image_folder, "mota2.png")
     output_mask = os.path.join(image_folder, "output_smooth_mask.png")
     output_masked = os.path.join(image_folder, "output_masked_image.png")
-    category = "upper_body"  # Change this to "lower_body" or "dresses" as needed
+    category = "dresses"  # Change this to "lower_body" or "dresses" as needed
     
     # Load the input image
     input_img = Image.open(input_image)
