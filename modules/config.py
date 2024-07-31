@@ -528,11 +528,11 @@ def downloading_inpaint_models(v):
     assert v in modules.flags.inpaint_engine_versions
 
     load_file_from_url(
-        url='https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/fooocus_inpaint_head.pth',
+        url='https://huggingface.co/Kwai-Kolors/Kolors/resolve/main/unet/diffusion_pytorch_model.safetensors',
         model_dir=path_inpaint,
-        file_name='fooocus_inpaint_head.pth'
+        file_name='kolors_inpaint_head.safetensors'
     )
-    head_file = os.path.join(path_inpaint, 'fooocus_inpaint_head.pth')
+    head_file = os.path.join(path_inpaint, 'kolors_inpaint_head.safetensors')
     patch_file = None
 
     if v == 'v1':
@@ -551,13 +551,15 @@ def downloading_inpaint_models(v):
         )
         patch_file = os.path.join(path_inpaint, 'inpaint_v25.fooocus.patch')
 
-    if v == 'v2.6':
+    if v == 'v2.6':  # You can change this to a new version if needed
         load_file_from_url(
-            url='https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/inpaint_v26.fooocus.patch',
+            url='https://huggingface.co/Kwai-Kolors/Kolors/resolve/main/unet/config.json',
             model_dir=path_inpaint,
-            file_name='inpaint_v26.fooocus.patch'
+            file_name='kolors_inpaint_patch.json'
         )
-        patch_file = os.path.join(path_inpaint, 'inpaint_v26.fooocus.patch')
+        patch_file = os.path.join(path_inpaint, 'kolors_inpaint_patch.json')
+
+
 
     return head_file, patch_file
 
