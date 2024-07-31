@@ -223,15 +223,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         print(f"Using category: {category}")
         
         # Generate mask using the updated Masking class
-        inpaint_mask = masker.get_mask(person_pil, category=category_input)
-
-        # Visualize the mask (for debugging)
-        visualize_mask(inpaint_mask)
-
-        # Inside virtual_try_on function
-        mask_save_path = os.path.join(modules.config.path_outputs, f"mask_{int(time.time())}.png")
-        cv2.imwrite(mask_save_path, inpaint_mask)
-        print(f"Mask saved at: {mask_save_path}")
+        inpaint_mask = masker.get_mask(person_pil, category=category)
 
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]

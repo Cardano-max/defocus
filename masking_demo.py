@@ -78,11 +78,8 @@ class Masking:
         # Apply edge feathering
         mask = self.apply_edge_feathering(mask)
 
-        # Ensure the mask is binary (black and white)
-        binary_mask = (mask > 0.5).astype(np.uint8) * 255
-
         # Resize mask back to original image size
-        mask_pil = Image.fromarray(binary_mask)
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -103,7 +100,7 @@ class Masking:
 
     def refine_mask(self, mask):
         # Convert to uint8 for OpenCV operations
-        mask_uint8 = mask.astype(np.uint8) * 255
+        mask_uint8 = (mask * 255).astype(np.uint8)
         
         # Apply morphological operations to smooth the mask
         kernel = np.ones((5,5), np.uint8)
@@ -159,38 +156,29 @@ import os
 from PIL import Image
 from Masking.masking import Masking
 
-def main():
-    # Initialize the Masking class
-    masker = Masking()
-
-    # Set up paths
-    image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    input_image_path = os.path.join(image_folder, "mota2.png")
-    output_mask_path = os.path.join(image_folder, "output_mask.png")
-    output_masked_image_path = os.path.join(image_folder, "output_masked_image.png")
-
-    # Set the category (you can change this as needed)
-    category = "dresses"  # Options: "upper_body", "lower_body", "dresses"
-
-    # Load the input image
-    input_img = Image.open(input_image_path)
-
-    # Get the mask using the new Masking class
-    mask = masker.get_mask(input_img, category=category)
-
-    # Convert the mask to a PIL Image
-    mask_image = Image.fromarray(mask)
-
-    # Save the output mask
-    mask_image.save(output_mask_path)
-    print(f"Mask saved to {output_mask_path}")
-
-    # Create and save the masked image
-    input_array = np.array(input_img)
-    masked_output = np.where(mask[:,:,np.newaxis] == 255, input_array, 0)
-    masked_image = Image.fromarray(masked_output.astype('uint8'))
-    masked_image.save(output_masked_image_path)
-    print(f"Masked image saved to {output_masked_image_path}")
-
 if __name__ == "__main__":
-    main()
+    masker = Masking()
+    image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
+    input_image = os.path.join(image_folder, "women.jpeg")
+    output_mask = os.path.join(image_folder, "output_smooth_mask.png")
+    output_masked = os.path.join(image_folder, "output_masked_image.png")
+    category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
+    
+    # Load the input image
+    input_img = Image.open(input_image)
+    
+    # Get the mask
+    mask = masker.get_mask(input_img, category=category)
+    
+    # Save the output mask image
+    Image.fromarray(mask).save(output_mask)
+    
+    # Apply the mask to the input image
+    masked_output = input_img.copy()
+    masked_output.putalpha(Image.fromarray(mask))
+    
+    # Save the masked output image
+    masked_output.save(output_masked)
+    
+    print(f"Mask saved to {output_mask}")
+    print(f"Masked output saved to {output_masked}")
