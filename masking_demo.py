@@ -69,14 +69,14 @@ class Masking:
         # Remove arms and hands from the mask
         mask = np.logical_and(mask, np.logical_not(arm_hand_mask))
 
+        # Enhance mask for white clothing
+        mask = self.enhance_white_clothing_mask(img_np, mask)
+
         # Refine the mask
         mask = self.refine_mask(mask)
 
-        # Apply Gaussian blur to create soft edges
-        mask = self.apply_gaussian_blur(mask)
-
-        # Apply edge feathering
-        mask = self.apply_edge_feathering(mask)
+        # Apply smoothing and feathering
+        mask = self.apply_smoothing_and_feathering(mask)
 
         # Resize mask back to original image size
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
@@ -92,11 +92,28 @@ class Masking:
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
+                hand_polygon = []
                 for landmark in hand_landmarks.landmark:
                     x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    cv2.circle(hand_mask, (x, y), 15, 255, -1)
+                    hand_polygon.append([x, y])
+                
+                hand_polygon = np.array(hand_polygon, dtype=np.int32)
+                cv2.fillPoly(hand_mask, [hand_polygon], 255)
         
         return hand_mask > 0
+
+    def enhance_white_clothing_mask(self, image, mask):
+        # Convert image to LAB color space
+        lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+        l_channel = lab_image[:,:,0]
+        
+        # Threshold the L channel to identify white areas
+        _, white_mask = cv2.threshold(l_channel, 200, 255, cv2.THRESH_BINARY)
+        
+        # Combine the white mask with the original mask
+        enhanced_mask = np.logical_or(mask, white_mask > 0)
+        
+        return enhanced_mask
 
     def refine_mask(self, mask):
         # Convert to uint8 for OpenCV operations
@@ -116,41 +133,30 @@ class Masking:
         else:
             mask_refined = mask_uint8
         
-        return mask_refined > 0  # Convert back to boolean mask
+        return mask_refined > 0
 
-    def apply_gaussian_blur(self, mask, kernel_size=15, sigma=5):
-        # Apply Gaussian blur to create soft edges
-        mask_float = mask.astype(np.float32)
-        blurred_mask = cv2.GaussianBlur(mask_float, (kernel_size, kernel_size), sigma)
-        return blurred_mask
-
-    def apply_edge_feathering(self, mask, feather_amount=10):
-        # Create a distance transform of the mask
-        dist_transform = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+    def apply_smoothing_and_feathering(self, mask, blur_radius=15, feather_amount=10):
+        # Apply Gaussian blur for smoothing
+        mask_float = mask.astype(float)
+        mask_blurred = cv2.GaussianBlur(mask_float, (blur_radius, blur_radius), 0)
         
-        # Normalize the distance transform
-        cv2.normalize(dist_transform, dist_transform, 0, 1.0, cv2.NORM_MINMAX)
+        # Create a gradient for feathering
+        gradient = np.zeros_like(mask_float)
+        gradient = cv2.distanceTransform((1 - mask_float).astype(np.uint8), cv2.DIST_L2, 5)
+        gradient = gradient.astype(float) / feather_amount
+        gradient = np.clip(gradient, 0, 1)
         
-        # Create a feathered mask
-        feathered_mask = np.clip(dist_transform * (255.0 / feather_amount), 0, 1)
+        # Apply feathering
+        mask_feathered = mask_blurred * (1 - gradient)
         
-        return feathered_mask
-
-    @staticmethod
-    def extend_arm_mask(wrist, elbow, scale):
-        wrist = elbow + scale * (wrist - elbow)
-        return wrist
+        return mask_feathered
 
     @staticmethod
     def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
         img_copy = img.copy()
         mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-
-        cv2.floodFill(img, mask, (0, 0), 255)
-        img_inverse = cv2.bitwise_not(img)
-        dst = cv2.bitwise_or(img_copy, img_inverse)
-        return dst
+        cv2.floodFill(img_copy, mask, (0, 0), 255)
+        return cv2.bitwise_or(img, cv2.bitwise_not(img_copy))
 
 import os
 from PIL import Image
