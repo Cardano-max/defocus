@@ -174,13 +174,18 @@ if __name__ == "__main__":
     input_img = Image.open(input_image)
     
     # Get the mask and masked output
-    mask, masked_output = masker.get_mask(input_img, category=category)
+    result = masker.get_mask(input_img, category=category)
     
-    # Save the output mask image
-    Image.fromarray(mask).save(output_mask)
-    
-    # Save the output masked image  
-    Image.fromarray(masked_output).save(output_masked)
-    
-    print(f"Mask saved to {output_mask}")
-    print(f"Masked output saved to {output_masked}")
+    if len(result) == 2:
+        mask, masked_output = result
+        
+        # Save the output mask image
+        Image.fromarray(mask).save(output_mask)
+        
+        # Save the output masked image  
+        Image.fromarray(masked_output).save(output_masked)
+        
+        print(f"Mask saved to {output_mask}")
+        print(f"Masked output saved to {output_masked}")
+    else:
+        print("Unexpected result from get_mask method.")
