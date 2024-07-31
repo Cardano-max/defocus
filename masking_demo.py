@@ -53,7 +53,7 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                        self.label_map["pants"], self.label_map["skirt"]])
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
@@ -72,24 +72,17 @@ class Masking:
         # Refine the mask
         mask = self.refine_mask(mask)
 
-        # Apply Gaussian blur to create smooth transition
-        mask_blurred = self.apply_gaussian_blur(mask)
+        # Apply Gaussian blur to create soft edges
+        mask = self.apply_gaussian_blur(mask)
 
-        # Create masked output image
-        masked_output = self.create_masked_output(img_np, mask_blurred)
+        # Apply edge feathering
+        mask = self.apply_edge_feathering(mask)
 
-        # Resize mask and masked output back to original image size
-        original_size = img.size
-        mask_pil = Image.fromarray((mask_blurred * 255).astype(np.uint8))
-        mask_pil_resized = mask_pil.resize(original_size, Image.LANCZOS)
+        # Resize mask back to original image size
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
-        masked_output_pil = Image.fromarray(masked_output)
-        masked_output_pil_resized = masked_output_pil.resize(original_size, Image.LANCZOS)
-        
-        print("Mask shape:", np.array(mask_pil_resized).shape)
-        print("Masked output shape:", np.array(masked_output_pil_resized).shape)
-        
-        return np.array(mask_pil_resized), np.array(masked_output_pil_resized)
+        return np.array(mask_pil)
 
     def create_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -107,7 +100,7 @@ class Masking:
 
     def refine_mask(self, mask):
         # Convert to uint8 for OpenCV operations
-        mask_uint8 = mask.astype(np.uint8) * 255
+        mask_uint8 = (mask * 255).astype(np.uint8)
         
         # Apply morphological operations to smooth the mask
         kernel = np.ones((5,5), np.uint8)
@@ -123,26 +116,25 @@ class Masking:
         else:
             mask_refined = mask_uint8
         
-        return mask_refined > 0
+        return mask_refined > 0  # Convert back to boolean mask
 
-    def apply_gaussian_blur(self, mask, kernel_size=21, sigma=5):
-        # Apply Gaussian blur to create smooth transition
-        mask_float = mask.astype(float)
-        mask_blurred = cv2.GaussianBlur(mask_float, (kernel_size, kernel_size), sigma)
-        return np.clip(mask_blurred, 0, 1)
+    def apply_gaussian_blur(self, mask, kernel_size=15, sigma=5):
+        # Apply Gaussian blur to create soft edges
+        mask_float = mask.astype(np.float32)
+        blurred_mask = cv2.GaussianBlur(mask_float, (kernel_size, kernel_size), sigma)
+        return blurred_mask
 
-    def create_masked_output(self, image, mask):
-        # If the image has an alpha channel, remove it
-        if image.shape[-1] == 4:
-            image = image[..., :3]
-
-        # Create a 3-channel mask
-        mask_3channel = np.stack([mask] * 3, axis=-1)
-
-        # Apply the mask to the image
-        masked_output = (image * mask_3channel).astype(np.uint8)
-
-        return masked_output
+    def apply_edge_feathering(self, mask, feather_amount=10):
+        # Create a distance transform of the mask
+        dist_transform = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        
+        # Normalize the distance transform
+        cv2.normalize(dist_transform, dist_transform, 0, 1.0, cv2.NORM_MINMAX)
+        
+        # Create a feathered mask
+        feathered_mask = np.clip(dist_transform * (255.0 / feather_amount), 0, 1)
+        
+        return feathered_mask
 
     @staticmethod
     def extend_arm_mask(wrist, elbow, scale):
@@ -151,7 +143,7 @@ class Masking:
 
     @staticmethod
     def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
+        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
         img_copy = img.copy()
         mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
 
@@ -160,35 +152,33 @@ class Masking:
         dst = cv2.bitwise_or(img_copy, img_inverse)
         return dst
 
+import os
 from PIL import Image
 from Masking.masking import Masking
 
 if __name__ == "__main__":
-    import os
-    
     masker = Masking()
     image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
     input_image = os.path.join(image_folder, "mota2.png")
-    output_mask = os.path.join(image_folder, "output_mask.png")
+    output_mask = os.path.join(image_folder, "output_smooth_mask.png")
     output_masked = os.path.join(image_folder, "output_masked_image.png")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     # Load the input image
     input_img = Image.open(input_image)
     
-    # Get the mask and masked output
-    result = masker.get_mask(input_img, category=category)
+    # Get the mask
+    mask = masker.get_mask(input_img, category=category)
     
-    if len(result) == 2:
-        mask, masked_output = result
-        
-        # Save the output mask image
-        Image.fromarray(mask).save(output_mask)
-        
-        # Save the output masked image  
-        Image.fromarray(masked_output).save(output_masked)
-        
-        print(f"Mask saved to {output_mask}")
-        print(f"Masked output saved to {output_masked}")
-    else:
-        print("Unexpected result from get_mask method.")
+    # Save the output mask image
+    Image.fromarray(mask).save(output_mask)
+    
+    # Apply the mask to the input image
+    masked_output = Image.fromarray(input_img)
+    masked_output.putalpha(Image.fromarray(mask))
+    
+    # Save the masked output image
+    masked_output.save(output_masked)
+    
+    print(f"Mask saved to {output_mask}")
+    print(f"Masked output saved to {output_masked}")
