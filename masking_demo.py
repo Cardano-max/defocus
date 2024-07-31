@@ -66,20 +66,23 @@ class Masking:
         # Combine arm and hand mask
         arm_hand_mask = np.logical_or(arm_mask, hand_mask)
 
-        # Remove arms and hands from the mask
-        mask = np.logical_and(mask, np.logical_not(arm_hand_mask))
-
         # Enhance mask for white clothing
-        mask = self.enhance_white_clothing_mask(img_np, mask)
+        enhanced_mask = self.enhance_white_clothing_mask(img_np, mask)
+
+        # Combine the enhanced mask with the original mask
+        combined_mask = np.logical_or(mask, enhanced_mask)
+
+        # Remove arms and hands from the mask
+        combined_mask = np.logical_and(combined_mask, np.logical_not(arm_hand_mask))
 
         # Refine the mask
-        mask = self.refine_mask(mask)
+        refined_mask = self.refine_mask(combined_mask)
 
         # Apply smoothing and feathering
-        mask = self.apply_smoothing_and_feathering(mask)
+        final_mask = self.apply_smoothing_and_feathering(refined_mask)
 
         # Resize mask back to original image size
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -102,16 +105,32 @@ class Masking:
         
         return hand_mask > 0
 
-    def enhance_white_clothing_mask(self, image, mask):
-        # Convert image to LAB color space
-        lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        l_channel = lab_image[:,:,0]
+    def enhance_white_clothing_mask(self, image, initial_mask):
+        # Convert image to HSV color space
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
         
-        # Threshold the L channel to identify white areas
-        _, white_mask = cv2.threshold(l_channel, 200, 255, cv2.THRESH_BINARY)
+        # Define range for white color in HSV
+        lower_white = np.array([0, 0, 200])
+        upper_white = np.array([180, 30, 255])
         
-        # Combine the white mask with the original mask
-        enhanced_mask = np.logical_or(mask, white_mask > 0)
+        # Create a mask for white regions
+        white_mask = cv2.inRange(hsv_image, lower_white, upper_white)
+        
+        # Apply edge detection to find boundaries of white regions
+        edges = cv2.Canny(image, 50, 150)
+        
+        # Dilate the edges to connect nearby edges
+        kernel = np.ones((5,5), np.uint8)
+        dilated_edges = cv2.dilate(edges, kernel, iterations=2)
+        
+        # Combine the white mask with edge information
+        white_regions = cv2.bitwise_and(white_mask, white_mask, mask=cv2.bitwise_not(dilated_edges))
+        
+        # Fill holes in the white regions
+        filled_white_regions = self.hole_fill(white_regions)
+        
+        # Combine with the initial mask
+        enhanced_mask = np.logical_or(initial_mask, filled_white_regions > 0)
         
         return enhanced_mask
 
@@ -154,9 +173,11 @@ class Masking:
     @staticmethod
     def hole_fill(img):
         img_copy = img.copy()
-        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-        cv2.floodFill(img_copy, mask, (0, 0), 255)
-        return cv2.bitwise_or(img, cv2.bitwise_not(img_copy))
+        h, w = img.shape[:2]
+        mask = np.zeros((h+2, w+2), np.uint8)
+        cv2.floodFill(img_copy, mask, (0,0), 255)
+        filled_image = cv2.bitwise_not(img_copy)
+        return cv2.bitwise_or(img, filled_image)
 
 import os
 from PIL import Image
