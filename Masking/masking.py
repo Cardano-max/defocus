@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from PIL import Image, ImageDraw
+from PIL import Image
 from functools import wraps
 from time import time
 import mediapipe as mp
@@ -72,8 +72,17 @@ class Masking:
         # Refine the mask
         mask = self.refine_mask(mask)
 
+        # Apply Gaussian blur to create soft edges
+        mask = self.apply_gaussian_blur(mask)
+
+        # Apply edge feathering
+        mask = self.apply_edge_feathering(mask)
+
+        # Ensure the mask is binary (black and white)
+        binary_mask = (mask > 0.5).astype(np.uint8) * 255
+
         # Resize mask back to original image size
-        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
+        mask_pil = Image.fromarray(binary_mask)
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -112,6 +121,24 @@ class Masking:
         
         return mask_refined > 0  # Convert back to boolean mask
 
+    def apply_gaussian_blur(self, mask, kernel_size=15, sigma=5):
+        # Apply Gaussian blur to create soft edges
+        mask_float = mask.astype(np.float32)
+        blurred_mask = cv2.GaussianBlur(mask_float, (kernel_size, kernel_size), sigma)
+        return blurred_mask
+
+    def apply_edge_feathering(self, mask, feather_amount=10):
+        # Create a distance transform of the mask
+        dist_transform = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        
+        # Normalize the distance transform
+        cv2.normalize(dist_transform, dist_transform, 0, 1.0, cv2.NORM_MINMAX)
+        
+        # Create a feathered mask
+        feathered_mask = np.clip(dist_transform * (255.0 / feather_amount), 0, 1)
+        
+        return feathered_mask
+
     @staticmethod
     def extend_arm_mask(wrist, elbow, scale):
         wrist = elbow + scale * (wrist - elbow)
@@ -119,7 +146,7 @@ class Masking:
 
     @staticmethod
     def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
+        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
         img_copy = img.copy()
         mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
 
