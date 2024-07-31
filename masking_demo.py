@@ -189,12 +189,13 @@ import os
 from PIL import Image
 from Masking.masking import Masking
 
+
 if __name__ == "__main__":
     masker = Masking()
     image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
     input_image = os.path.join(image_folder, "GIRL.jpeg")
-    output_mask = os.path.join(image_folder, "output_smooth_mask.png")
-    output_masked = os.path.join(image_folder, "output_masked_image.png")
+    output_mask = os.path.join(image_folder, "output_smooth_mask1.png")
+    output_masked = os.path.join(image_folder, "output_masked_image1.png")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     # Load the input image
