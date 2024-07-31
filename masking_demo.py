@@ -1,13 +1,13 @@
+# Masking/masking.py
+
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageDraw
 from functools import wraps
 from time import time
 import mediapipe as mp
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
-import skimage.filters as filters
-import skimage.morphology as morphology
 
 def timing(f):
     @wraps(f)
@@ -59,26 +59,23 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Enhance mask for white clothing
-        enhanced_mask = self.enhance_white_clothing_mask(img_np, mask)
-
-        # Combine the enhanced mask with the original mask
-        combined_mask = np.logical_or(mask, enhanced_mask)
+        # Create arm mask
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
 
         # Create hand mask using MediaPipe
         hand_mask = self.create_hand_mask(img_np)
 
-        # Refine the combined mask
-        refined_mask = self.refine_mask(combined_mask)
+        # Combine arm and hand mask
+        arm_hand_mask = np.logical_or(arm_mask, hand_mask)
 
-        # Remove hands from the mask
-        final_mask = np.logical_and(refined_mask, np.logical_not(hand_mask))
+        # Remove arms and hands from the mask
+        mask = np.logical_and(mask, np.logical_not(arm_hand_mask))
 
-        # Apply smoothing and feathering
-        final_mask = self.apply_smoothing_and_feathering(final_mask)
+        # Refine the mask
+        mask = self.refine_mask(mask)
 
         # Resize mask back to original image size
-        mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -91,59 +88,15 @@ class Masking:
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                hand_polygon = []
                 for landmark in hand_landmarks.landmark:
                     x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    hand_polygon.append([x, y])
-                
-                hand_polygon = np.array(hand_polygon, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_polygon], 255)
+                    cv2.circle(hand_mask, (x, y), 15, 255, -1)
         
-        # Apply morphological operations to smooth hand mask
-        kernel = np.ones((5,5), np.uint8)
-        hand_mask = cv2.morphologyEx(hand_mask, cv2.MORPH_CLOSE, kernel)
-        hand_mask = cv2.morphologyEx(hand_mask, cv2.MORPH_OPEN, kernel)
-        
-        # Apply Gaussian blur to further smooth the edges
-        hand_mask = cv2.GaussianBlur(hand_mask, (5, 5), 0)
-        
-        return hand_mask > 128
-
-    def enhance_white_clothing_mask(self, image, initial_mask):
-        # Convert image to LAB color space
-        lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        l_channel = lab_image[:,:,0]
-        
-        # Apply adaptive thresholding to L channel
-        thresh = cv2.adaptiveThreshold(l_channel, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        
-        # Apply edge detection
-        edges = cv2.Canny(image, 50, 150)
-        
-        # Dilate edges to connect nearby edges
-        kernel = np.ones((3,3), np.uint8)
-        dilated_edges = cv2.dilate(edges, kernel, iterations=1)
-        
-        # Combine thresholded image with edge information
-        white_regions = cv2.bitwise_and(thresh, thresh, mask=cv2.bitwise_not(dilated_edges))
-        
-        # Fill holes in the white regions
-        filled_white_regions = self.hole_fill(white_regions)
-        
-        # Create a mask for likely clothing area based on initial mask
-        clothing_area = cv2.dilate(initial_mask.astype(np.uint8) * 255, kernel, iterations=10)
-        
-        # Combine filled white regions with likely clothing area
-        white_clothing = cv2.bitwise_and(filled_white_regions, filled_white_regions, mask=clothing_area)
-        
-        # Combine with the initial mask
-        enhanced_mask = np.logical_or(initial_mask, white_clothing > 0)
-        
-        return enhanced_mask
+        return hand_mask > 0
 
     def refine_mask(self, mask):
         # Convert to uint8 for OpenCV operations
-        mask_uint8 = (mask * 255).astype(np.uint8)
+        mask_uint8 = mask.astype(np.uint8) * 255
         
         # Apply morphological operations to smooth the mask
         kernel = np.ones((5,5), np.uint8)
@@ -159,31 +112,23 @@ class Masking:
         else:
             mask_refined = mask_uint8
         
-        return mask_refined > 0
+        return mask_refined > 0  # Convert back to boolean mask
 
-    def apply_smoothing_and_feathering(self, mask, blur_radius=5, feather_amount=3):
-        # Apply Gaussian blur for smoothing
-        mask_float = mask.astype(float)
-        mask_blurred = filters.gaussian(mask_float, sigma=blur_radius)
-        
-        # Create a gradient for feathering
-        distance = morphology.distance_transform_edt(mask_blurred)
-        gradient = distance / feather_amount
-        gradient = np.clip(gradient, 0, 1)
-        
-        # Apply feathering
-        mask_feathered = mask_blurred * gradient
-        
-        return mask_feathered
+    @staticmethod
+    def extend_arm_mask(wrist, elbow, scale):
+        wrist = elbow + scale * (wrist - elbow)
+        return wrist
 
     @staticmethod
     def hole_fill(img):
+        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
         img_copy = img.copy()
-        h, w = img.shape[:2]
-        mask = np.zeros((h+2, w+2), np.uint8)
-        cv2.floodFill(img_copy, mask, (0,0), 255)
-        filled_image = cv2.bitwise_not(img_copy)
-        return cv2.bitwise_or(img, filled_image)
+        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
+
+        cv2.floodFill(img, mask, (0, 0), 255)
+        img_inverse = cv2.bitwise_not(img)
+        dst = cv2.bitwise_or(img_copy, img_inverse)
+        return dst
 
 import os
 from PIL import Image
