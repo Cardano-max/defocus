@@ -157,6 +157,9 @@ class Masking:
         dst = cv2.bitwise_or(img_copy, img_inverse)
         return dst
 
+from PIL import Image
+from Masking.masking import Masking
+
 if __name__ == "__main__":
     import os
     
@@ -176,7 +179,7 @@ if __name__ == "__main__":
     # Save the output mask image
     Image.fromarray(mask).save(output_mask)
     
-    # Save the output masked image
+    # Save the output masked image  
     Image.fromarray(masked_output).save(output_masked)
     
     print(f"Mask saved to {output_mask}")
