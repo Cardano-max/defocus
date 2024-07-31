@@ -126,29 +126,8 @@ class Masking:
         return final_mask
 
 if __name__ == "__main__":
-    import os
-    
-    masker = Masking()
     image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    input_image = os.path.join(image_folder, ".jpg")
-    output_image = os.path.join(image_folder, "output_mask.png")
-    category = "upper_body"  # Change this to "lower_body" or "dresses" as needed
-    
-    # Load the input image
-    input_img = Image.open(input_image)
-    
-    # Get the mask
-    mask = masker.get_mask(input_img, category=category)
-    
-    # Save the output mask image
-    output_img = Image.fromarray(mask)
-    output_img.save(output_image)
-    
-    print(f"Mask saved to {output_image}")
-
-if __name__ == "__main__":
-    image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    input_image = os.path.join(image_folder, "no.png")  # Replace "input_image.jpg" with your actual image file name
+    input_image = os.path.join(image_folder, "mota2.png")  # Replace "input_image.jpg" with your actual image file name
     output_image = os.path.join(image_folder, "output_mask.png")
     category = "dresses"  # Change this to "lower_body" or "dresses" as needed
     
