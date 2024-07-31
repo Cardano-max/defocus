@@ -1,9 +1,8 @@
 import numpy as np
 import cv2
-from PIL import Image, ImageDraw
+from PIL import Image
 from functools import wraps
 from time import time
-import mediapipe as mp
 import os
 
 def timing(f):
@@ -19,130 +18,96 @@ def timing(f):
 
 class Masking:
     def __init__(self):
-        self.mp_pose = mp.solutions.pose
-        self.mp_hands = mp.solutions.hands
-        self.pose = self.mp_pose.Pose(static_image_mode=True, model_complexity=2, min_detection_confidence=0.5)
-        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5)
+        self.label_map = {
+            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
+            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
+            "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
+            "bag": 16, "scarf": 17, "neck": 18
+        }
 
     @timing
     def get_mask(self, img, category='upper_body'):
         # Convert PIL Image to numpy array
         img_np = np.array(img)
         
-        # Get pose estimation
-        pose_results = self.pose.process(cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
-        
-        # Create initial mask based on category and pose
-        mask = self.create_initial_mask(img_np, pose_results, category)
-        
-        # Refine mask with hand detection
-        mask = self.refine_mask_with_hands(img_np, mask)
+        # Create initial mask based on category
+        mask = self.create_initial_mask(img_np, category)
         
         # Apply smooth transition to edges
-        mask = self.apply_smooth_transition(mask)
+        smooth_mask = self.apply_smooth_transition(mask)
         
-        return mask
+        # Create masked output image
+        masked_output = self.create_masked_output(img_np, smooth_mask)
+        
+        return smooth_mask, masked_output
 
-    def create_initial_mask(self, image, pose_results, category):
+    def create_initial_mask(self, image, category):
+        # Simulating a segmentation result for demonstration
+        # In a real scenario, you would use your existing segmentation model here
         height, width = image.shape[:2]
         mask = np.zeros((height, width), dtype=np.uint8)
         
-        if pose_results.pose_landmarks:
-            landmarks = pose_results.pose_landmarks.landmark
-            
-            if category == 'upper_body':
-                self.draw_upper_body_mask(mask, landmarks, height, width)
-            elif category == 'lower_body':
-                self.draw_lower_body_mask(mask, landmarks, height, width)
-            elif category == 'dresses':
-                self.draw_full_body_mask(mask, landmarks, height, width)
-            else:
-                raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
+        if category == 'upper_body':
+            mask[height//4:3*height//4, width//4:3*width//4] = 255
+        elif category == 'lower_body':
+            mask[height//2:, width//4:3*width//4] = 255
+        elif category == 'dresses':
+            mask[height//4:, width//4:3*width//4] = 255
+        else:
+            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
         
         return mask
 
-    def draw_upper_body_mask(self, mask, landmarks, height, width):
-        body_pts = [
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].y * height),
-        ]
-        cv2.fillPoly(mask, [np.array(body_pts, dtype=np.int32)], 255)
+    def apply_smooth_transition(self, mask, blur_radius=30, transition_width=20):
+        # Create a copy of the mask
+        smooth_mask = mask.copy().astype(np.float32)
+        
+        # Apply Gaussian blur to create initial smoothing
+        blurred = cv2.GaussianBlur(smooth_mask, (blur_radius, blur_radius), 0)
+        
+        # Create a transition mask
+        transition_mask = np.zeros_like(smooth_mask)
+        transition_mask = cv2.dilate(smooth_mask, np.ones((transition_width, transition_width), np.uint8)) - \
+                          cv2.erode(smooth_mask, np.ones((transition_width, transition_width), np.uint8))
+        
+        # Apply the transition
+        smooth_mask = np.where(transition_mask == 255, blurred, smooth_mask)
+        
+        # Normalize to 0-255 range
+        smooth_mask = ((smooth_mask - smooth_mask.min()) / (smooth_mask.max() - smooth_mask.min()) * 255).astype(np.uint8)
+        
+        return smooth_mask
 
-    def draw_lower_body_mask(self, mask, landmarks, height, width):
-        body_pts = [
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].y * height),
-        ]
-        cv2.fillPoly(mask, [np.array(body_pts, dtype=np.int32)], 255)
-
-    def draw_full_body_mask(self, mask, landmarks, height, width):
-        body_pts = [
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].y * height),
-            (landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].x * width,
-             landmarks[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].y * height),
-        ]
-        cv2.fillPoly(mask, [np.array(body_pts, dtype=np.int32)], 255)
-
-    def refine_mask_with_hands(self, image, mask):
-        hand_results = self.hands.process(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    def create_masked_output(self, image, mask):
+        # Ensure mask is binary
+        binary_mask = (mask > 127).astype(np.uint8) * 255
         
-        if hand_results.multi_hand_landmarks:
-            for hand_landmarks in hand_results.multi_hand_landmarks:
-                for landmark in hand_landmarks.landmark:
-                    x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    cv2.circle(mask, (x, y), 15, 0, -1)  # Remove hands from mask
+        # Apply the mask to the original image
+        masked_output = cv2.bitwise_and(image, image, mask=binary_mask)
         
-        return mask
-
-    def apply_smooth_transition(self, mask, blur_radius=15):
-        # Apply Gaussian blur to create smooth transition
-        blurred_mask = cv2.GaussianBlur(mask, (blur_radius, blur_radius), 0)
-        
-        # Create a gradient transition
-        gradient_mask = np.zeros_like(mask)
-        cv2.circle(gradient_mask, (mask.shape[1]//2, mask.shape[0]//2), 
-                   min(mask.shape[0], mask.shape[1])//2, 255, -1)
-        gradient_mask = cv2.GaussianBlur(gradient_mask, (blur_radius*2+1, blur_radius*2+1), 0)
-        
-        # Combine original mask, blurred mask, and gradient
-        final_mask = np.where(gradient_mask > 127, mask, blurred_mask)
-        
-        return final_mask
+        return masked_output
 
 if __name__ == "__main__":
+    import os
+    
+    masker = Masking()
     image_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/TEST"
-    input_image = os.path.join(image_folder, "mota2.png")  # Replace "input_image.jpg" with your actual image file name
-    output_image = os.path.join(image_folder, "output_mask.png")
-    category = "dresses"  # Change this to "lower_body" or "dresses" as needed
+    input_image = os.path.join(image_folder, "mota2.png")
+    output_mask = os.path.join(image_folder, "output_smooth_mask.png")
+    output_masked = os.path.join(image_folder, "output_masked_image.png")
+    category = "upper_body"  # Change this to "lower_body" or "dresses" as needed
     
     # Load the input image
     input_img = Image.open(input_image)
     
-    # Create an instance of Masking
-    masking = Masking()
+    # Get the smooth mask and masked output
+    smooth_mask, masked_output = masker.get_mask(input_img, category=category)
     
-    # Get the mask
-    mask = masking.get_mask(input_img, category=category)
+    # Save the output smooth mask image
+    Image.fromarray(smooth_mask).save(output_mask)
     
-    # Save the output mask image
-    output_img = Image.fromarray(mask)
-    output_img.save(output_image)
+    # Save the output masked image
+    Image.fromarray(masked_output).save(output_masked)
     
-    print(f"Mask saved to {output_image}")
+    print(f"Smooth mask saved to {output_mask}")
+    print(f"Masked output saved to {output_masked}")
