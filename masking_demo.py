@@ -174,7 +174,7 @@ if __name__ == "__main__":
     Image.fromarray(mask).save(output_mask)
     
     # Apply the mask to the input image
-    masked_output = Image.fromarray(input_img)
+    masked_output = input_img.copy()
     masked_output.putalpha(Image.fromarray(mask))
     
     # Save the masked output image
