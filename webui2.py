@@ -225,6 +225,9 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Generate mask using the updated Masking class
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
+        # Convert the mask to the correct format for inpainting
+        inpaint_mask = (inpaint_mask * 255).astype(np.uint8)
+
         # Get the original dimensions
         orig_person_h, orig_person_w = person_image.shape[:2]
 
