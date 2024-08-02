@@ -58,28 +58,74 @@ class AdvancedGarmentFitter:
         return landmarks
 
     def match_landmarks(self, garment_landmarks, person_landmarks):
-        # This is a simplified matching. In a real scenario, you'd use a more sophisticated algorithm.
         matched_pairs = []
+        used_person_landmarks = set()
         for g_key, g_point in garment_landmarks.items():
-            closest_p_key = min(person_landmarks, key=lambda p: np.linalg.norm(np.array(g_point) - np.array(person_landmarks[p])))
-            matched_pairs.append((g_point, person_landmarks[closest_p_key]))
+            distances = {p_key: np.linalg.norm(np.array(g_point) - np.array(p_point)) 
+                        for p_key, p_point in person_landmarks.items() 
+                        if p_key not in used_person_landmarks}
+            if distances:
+                closest_p_key = min(distances, key=distances.get)
+                matched_pairs.append((g_point, person_landmarks[closest_p_key]))
+                used_person_landmarks.add(closest_p_key)
+
+        # Ensure we have at least 4 unique pairs
+        if len(matched_pairs) < 4:
+            print("Not enough matched pairs. Adding additional points.")
+            additional_points = list(set(person_landmarks.values()) - set(p for _, p in matched_pairs))
+            matched_pairs.extend([(p, p) for p in additional_points[:4-len(matched_pairs)]])
+
         return np.array(matched_pairs)
+
+from scipy.spatial import Delaunay, ConvexHull
+from scipy.interpolate import griddata
 
     def transform_garment(self, garment_image, person_image, matched_pairs):
         src_points = matched_pairs[:, 0]
         dst_points = matched_pairs[:, 1]
         
-        # Create Delaunay triangulation
-        tri = Delaunay(src_points)
-        
+        # Ensure we have enough unique points
+        if len(np.unique(src_points, axis=0)) < 4 or len(np.unique(dst_points, axis=0)) < 4:
+            print("Not enough unique points for transformation. Using simple resize.")
+            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
+
+        try:
+            # Try Delaunay triangulation
+            tri = Delaunay(src_points)
+        except Exception as e:
+            print(f"Delaunay triangulation failed: {e}")
+            print("Falling back to convex hull for transformation.")
+            try:
+                # Use convex hull if Delaunay fails
+                hull = ConvexHull(src_points)
+                tri = Delaunay(src_points[hull.vertices])
+            except Exception as e:
+                print(f"Convex hull failed: {e}")
+                print("Using simple interpolation for transformation.")
+                # If both fail, use simple interpolation
+                grid_x, grid_y = np.mgrid[0:person_image.shape[1], 0:person_image.shape[0]]
+                warped_garment = np.zeros_like(person_image)
+                for channel in range(3):
+                    warped_garment[:,:,channel] = griddata(src_points, garment_image[src_points[:,1].astype(int), src_points[:,0].astype(int), channel], (grid_x, grid_y), method='linear', fill_value=0)
+                return warped_garment.astype(np.uint8)
+
         # Create piecewise affine transform
         transform = PiecewiseAffineTransform()
-        transform.estimate(src_points, dst_points)
-        
+        try:
+            transform.estimate(src_points, dst_points)
+        except Exception as e:
+            print(f"PiecewiseAffineTransform estimation failed: {e}")
+            print("Using simple resize as fallback.")
+            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
+
         # Apply the transform
-        warped_garment = warp(garment_image, transform, output_shape=person_image.shape[:2])
-        
-        return (warped_garment * 255).astype(np.uint8)
+        try:
+            warped_garment = warp(garment_image, transform, output_shape=person_image.shape[:2])
+            return (warped_garment * 255).astype(np.uint8)
+        except Exception as e:
+            print(f"Warping failed: {e}")
+            print("Using simple resize as final fallback.")
+            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
 
     def blend_images(self, person_image, warped_garment):
         mask = cv2.threshold(cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY), 1, 255, cv2.THRESH_BINARY)[1]
