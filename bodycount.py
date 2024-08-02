@@ -1,132 +1,101 @@
 import cv2
 import numpy as np
-from PIL import Image
 import mediapipe as mp
 
-class GarmentFitter:
-    def __init__(self):
-        self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+def get_face_landmarks(image):
+    mp_face_mesh = mp.solutions.face_mesh
+    with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5) as face_mesh:
+        results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        if not results.multi_face_landmarks:
+            return None
+        return np.array([(lm.x * image.shape[1], lm.y * image.shape[0]) for lm in results.multi_face_landmarks[0].landmark])
 
-    def detect_body_landmarks(self, image):
-        results = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+def get_body_landmarks(image):
+    mp_pose = mp.solutions.pose
+    with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
+        results = pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         if not results.pose_landmarks:
-            raise ValueError("No body landmarks detected in the image.")
-        return results.pose_landmarks
+            return None
+        return np.array([(lm.x * image.shape[1], lm.y * image.shape[0]) for lm in results.pose_landmarks.landmark])
 
-    def get_body_measurements(self, landmarks, image_shape):
-        # Extract key measurements (simplified for this example)
-        shoulder_left = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER].x * image_shape[1],
-                                  landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER].y * image_shape[0]])
-        shoulder_right = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER].x * image_shape[1],
-                                   landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER].y * image_shape[0]])
-        hip_left = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP].x * image_shape[1],
-                             landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP].y * image_shape[0]])
-        hip_right = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP].x * image_shape[1],
-                              landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP].y * image_shape[0]])
+def WarpImage_TPS(source, target, img):
+    tps = cv2.createThinPlateSplineShapeTransformer()
 
-        shoulder_width = np.linalg.norm(shoulder_right - shoulder_left)
-        hip_width = np.linalg.norm(hip_right - hip_left)
-        torso_height = np.mean([hip_left[1], hip_right[1]]) - np.mean([shoulder_left[1], shoulder_right[1]])
+    source = source.reshape(-1, len(source), 2)
+    target = target.reshape(-1, len(target), 2)
 
-        return {
-            "shoulder_width": shoulder_width,
-            "hip_width": hip_width,
-            "torso_height": torso_height,
-            "shoulder_left": shoulder_left,
-            "shoulder_right": shoulder_right,
-            "hip_left": hip_left,
-            "hip_right": hip_right
-        }
+    matches = [cv2.DMatch(i, i, 0) for i in range(len(source[0]))]
 
-    def detect_garment_keypoints(self, garment_image):
-        # This is a placeholder. In a real implementation, you'd use a more sophisticated
-        # method to detect garment keypoints, possibly using a trained model.
-        gray = cv2.cvtColor(garment_image, cv2.COLOR_BGR2GRAY)
-        corners = cv2.goodFeaturesToTrack(gray, 25, 0.01, 10)
-        corners = np.int0(corners)
-        return corners.reshape(-1, 2)
+    tps.estimateTransformation(target, source, matches)
+    new_img = tps.warpImage(img)
 
-    def map_garment_to_body(self, person_image, garment_image, body_measurements, garment_keypoints):
-        person_height, person_width = person_image.shape[:2]
-        garment_height, garment_width = garment_image.shape[:2]
+    return new_img
 
-        # Calculate scaling factors
-        scale_x = body_measurements["shoulder_width"] / garment_width
-        scale_y = body_measurements["torso_height"] / garment_height
+def fit_garment(person_image, garment_image):
+    # Get person landmarks
+    face_landmarks = get_face_landmarks(person_image)
+    body_landmarks = get_body_landmarks(person_image)
+    
+    if face_landmarks is None or body_landmarks is None:
+        raise ValueError("Could not detect face or body landmarks")
 
-        # Create transformation matrix
-        src_points = np.float32([
-            [0, 0],
-            [garment_width - 1, 0],
-            [0, garment_height - 1],
-            [garment_width - 1, garment_height - 1]
-        ])
+    # Define key points for garment fitting
+    left_shoulder = body_landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
+    right_shoulder = body_landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
+    left_hip = body_landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
+    right_hip = body_landmarks[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
 
-        dst_points = np.float32([
-            body_measurements["shoulder_left"],
-            body_measurements["shoulder_right"],
-            body_measurements["hip_left"],
-            body_measurements["hip_right"]
-        ])
+    # Define source points on the garment
+    garment_height, garment_width = garment_image.shape[:2]
+    source_points = np.array([
+        [0, 0],
+        [garment_width, 0],
+        [0, garment_height],
+        [garment_width, garment_height],
+        [garment_width/2, 0],
+        [garment_width/2, garment_height],
+        [0, garment_height/2],
+        [garment_width, garment_height/2]
+    ])
 
-        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+    # Define target points on the person
+    target_points = np.array([
+        left_shoulder,
+        right_shoulder,
+        left_hip,
+        right_hip,
+        (left_shoulder + right_shoulder) / 2,
+        (left_hip + right_hip) / 2,
+        (left_shoulder + left_hip) / 2,
+        (right_shoulder + right_hip) / 2
+    ])
 
-        # Apply the transformation
-        warped_garment = cv2.warpPerspective(garment_image, matrix, (person_width, person_height))
+    # Warp the garment image
+    warped_garment = WarpImage_TPS(source_points, target_points, garment_image)
 
-        return warped_garment
+    # Blend the warped garment with the person image
+    mask = cv2.threshold(cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY)[1]
+    mask_inv = cv2.bitwise_not(mask)
+    person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
+    garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
+    result = cv2.add(person_bg, garment_fg)
 
-    def blend_images(self, person_image, warped_garment):
-        # Create a mask for the warped garment
-        mask = cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+    return result, warped_garment
 
-        # Invert the mask
-        mask_inv = cv2.bitwise_not(mask)
-
-        # Black-out the area of the garment in the person image
-        person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
-
-        # Take only the region of the garment from the warped image
-        garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
-
-        # Combine the two images
-        result = cv2.add(person_bg, garment_fg)
-
-        return result
-
-    def fit_garment(self, person_image_path, garment_image_path):
-        person_image = cv2.imread(person_image_path)
-        garment_image = cv2.imread(garment_image_path)
-
-        if person_image is None or garment_image is None:
-            raise ValueError("Unable to read one or both of the input images.")
-
-        landmarks = self.detect_body_landmarks(person_image)
-        body_measurements = self.get_body_measurements(landmarks, person_image.shape)
-        garment_keypoints = self.detect_garment_keypoints(garment_image)
-
-        warped_garment = self.map_garment_to_body(person_image, garment_image, body_measurements, garment_keypoints)
-        result = self.blend_images(person_image, warped_garment)
-
-        return result
-
-    def visualize_keypoints(self, image, keypoints):
-        for point in keypoints:
-            x, y = point.ravel()
-            cv2.circle(image, (int(x), int(y)), 3, 255, -1)
-        return image
-
+# Main execution
 if __name__ == "__main__":
-    fitter = GarmentFitter()
-    
-    person_image_path = "TEST/mota.jpg"
-    garment_image_path = "images/b9.png"
-    
+    # Load images
+    person_image = cv2.imread('TEST/mota.jpg')
+    garment_image = cv2.imread('images/b9.png', cv2.IMREAD_UNCHANGED)
+
+    # Fit garment
     try:
-        result = fitter.fit_garment(person_image_path, garment_image_path)
-        cv2.imwrite("fitted_garment.jpg", result)
-        print("Garment fitting completed. Result saved as 'fitted_garment.jpg'")
+        result, warped_garment = fit_garment(person_image, garment_image)
+        
+        # Save results
+        cv2.imwrite('fitted_garment.jpg', result)
+        cv2.imwrite('warped_garment.png', warped_garment)
+        
+        print("Processing completed. Check 'fitted_garment.jpg' and 'warped_garment.png' for results.")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
