@@ -8,6 +8,9 @@ import mediapipe as mp
 from scipy.spatial import Delaunay
 from skimage.transform import PiecewiseAffineTransform, warp
 
+from scipy.spatial import Delaunay, ConvexHull
+from scipy.interpolate import griddata
+
 class AdvancedGarmentFitter:
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -77,8 +80,6 @@ class AdvancedGarmentFitter:
 
         return np.array(matched_pairs)
 
-from scipy.spatial import Delaunay, ConvexHull
-from scipy.interpolate import griddata
 
     def transform_garment(self, garment_image, person_image, matched_pairs):
         src_points = matched_pairs[:, 0]
