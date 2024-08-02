@@ -13,7 +13,7 @@ class GarmentFitter:
         self.mp_hands = mp.solutions.hands
         self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
         self.hands = self.mp_hands.Hands(static_image_mode=True, min_detection_confidence=0.5)
-        self.api_token = os.environ.get("r8_IeCOnHH0kGL7jscpqy4r7LLggru0ELM0d1qDU")
+        self.api_token = os.environ.get("REPLICATE_API_TOKEN")
         if not self.api_token:
             raise ValueError("Please set the REPLICATE_API_TOKEN environment variable.")
 
