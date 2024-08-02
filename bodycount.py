@@ -1,189 +1,164 @@
-import cv2
 import numpy as np
-import torch
-import torchvision.transforms as T
-from torchvision.models.segmentation import deeplabv3_resnet101
+import cv2
 from PIL import Image
+from functools import wraps
+from time import time
 import mediapipe as mp
+from Masking.preprocess.humanparsing.run_parsing import Parsing
+from Masking.preprocess.openpose.run_openpose import OpenPose
+from scipy.ndimage import gaussian_filter
 from scipy.spatial import Delaunay
 from skimage.transform import PiecewiseAffineTransform, warp
 
-from scipy.spatial import Delaunay, ConvexHull
-from scipy.interpolate import griddata
+def timing(f):
+    @wraps(f)
+    def wrap(*args, **kw):
+        ts = time()
+        result = f(*args, **kw)
+        te = time()
+        print(f'func:{f.__name__} took: {te-ts:.4f} sec')
+        return result
+    return wrap
 
-class AdvancedGarmentFitter:
+class Masking:
     def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.segmentation_model = self.load_segmentation_model()
+        self.parsing_model = Parsing(-1)
+        self.openpose_model = OpenPose(-1)
+        self.mp_hands = mp.solutions.hands
         self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.7)
+        self.pose = self.mp_pose.Pose(static_image_mode=True, model_complexity=2, min_detection_confidence=0.7)
+        self.label_map = {
+            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
+            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
+            "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
+            "bag": 16, "scarf": 17, "neck": 18
+        }
 
-    def load_segmentation_model(self):
-        model = deeplabv3_resnet101(pretrained=True)
-        model.eval().to(self.device)
-        return model
-
-    def segment_garment(self, image):
-        transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        input_tensor = transform(image).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            output = self.segmentation_model(input_tensor)['out'][0]
-        mask = output.argmax(0).byte().cpu().numpy()
-        return mask
-
-    def get_garment_landmarks(self, image, mask):
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        largest_contour = max(contours, key=cv2.contourArea)
+    @timing
+    def get_mask(self, img, category='upper_body'):
+        img_resized = img.resize((512, 512), Image.LANCZOS)
+        img_np = np.array(img_resized)
         
-        # Get key points along the contour
-        epsilon = 0.02 * cv2.arcLength(largest_contour, True)
+        parse_result, _ = self.parsing_model(img_resized)
+        parse_array = np.array(parse_result)
+
+        if category == 'upper_body':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
+        elif category == 'lower_body':
+            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+        elif category == 'dresses':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                         self.label_map["pants"], self.label_map["skirt"]])
+        else:
+            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
+
+        mask = self.refine_mask(mask, img_np)
+        mask = self.apply_gaussian_blur(mask)
+
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        
+        return np.array(mask_pil)
+
+    def refine_mask(self, mask, image):
+        mask_uint8 = mask.astype(np.uint8) * 255
+        
+        kernel = np.ones((5,5), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+        
+        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            mask_refined = np.zeros_like(mask_uint8)
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, -1)
+        else:
+            mask_refined = mask_uint8
+        
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        lower_white = np.array([0, 0, 200])
+        upper_white = np.array([180, 30, 255])
+        white_mask = cv2.inRange(hsv, lower_white, upper_white)
+        
+        mask_combined = cv2.bitwise_or(mask_refined, white_mask)
+        
+        return mask_combined > 0
+
+    def apply_gaussian_blur(self, mask, sigma=3):
+        blurred_mask = gaussian_filter(mask.astype(float), sigma=sigma)
+        blurred_mask = (blurred_mask - blurred_mask.min()) / (blurred_mask.max() - blurred_mask.min())
+        return blurred_mask
+
+    def generate_landmarks(self, mask, num_points=100):
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return []
+        
+        largest_contour = max(contours, key=cv2.contourArea)
+        perimeter = cv2.arcLength(largest_contour, True)
+        epsilon = 0.01 * perimeter
         approx = cv2.approxPolyDP(largest_contour, epsilon, True)
         
-        landmarks = {}
-        for i, point in enumerate(approx):
-            x, y = point[0]
-            landmarks[f'garment_{i}'] = [x, y]
+        landmarks = []
+        for point in approx:
+            landmarks.append(point[0])
         
-        return landmarks
-
-    def get_person_landmarks(self, image):
-        results = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        if not results.pose_landmarks:
-            raise ValueError("No pose landmarks detected in the image.")
+        # Interpolate to get the desired number of points
+        if len(landmarks) < num_points:
+            landmarks = np.array(landmarks)
+            t = np.linspace(0, 1, len(landmarks), endpoint=False)
+            t_new = np.linspace(0, 1, num_points, endpoint=False)
+            landmarks = np.array([np.interp(t_new, t, landmarks[:, i]) for i in range(2)]).T
         
-        landmarks = {}
-        for i, landmark in enumerate(results.pose_landmarks.landmark):
-            landmarks[f'person_{i}'] = [landmark.x * image.shape[1], landmark.y * image.shape[0]]
+        return landmarks.tolist()
+
+    def align_garment(self, garment_img, person_img, category):
+        garment_mask = self.get_mask(garment_img, category)
+        person_mask = self.get_mask(person_img, category)
         
-        return landmarks
-
-    def match_landmarks(self, garment_landmarks, person_landmarks):
-        matched_pairs = []
-        used_person_landmarks = set()
-        for g_key, g_point in garment_landmarks.items():
-            distances = {p_key: np.linalg.norm(np.array(g_point) - np.array(p_point)) 
-                        for p_key, p_point in person_landmarks.items() 
-                        if p_key not in used_person_landmarks}
-            if distances:
-                closest_p_key = min(distances, key=distances.get)
-                matched_pairs.append((g_point, person_landmarks[closest_p_key]))
-                used_person_landmarks.add(closest_p_key)
-
-        # Ensure we have at least 4 unique pairs
-        if len(matched_pairs) < 4:
-            print("Not enough matched pairs. Adding additional points.")
-            additional_points = list(set(person_landmarks.values()) - set(p for _, p in matched_pairs))
-            matched_pairs.extend([(p, p) for p in additional_points[:4-len(matched_pairs)]])
-
-        return np.array(matched_pairs)
-
-
-    def transform_garment(self, garment_image, person_image, matched_pairs):
-        src_points = matched_pairs[:, 0]
-        dst_points = matched_pairs[:, 1]
+        garment_landmarks = self.generate_landmarks(garment_mask)
+        person_landmarks = self.generate_landmarks(person_mask)
         
-        # Ensure we have enough unique points
-        if len(np.unique(src_points, axis=0)) < 4 or len(np.unique(dst_points, axis=0)) < 4:
-            print("Not enough unique points for transformation. Using simple resize.")
-            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
-
+        src_points = np.array(garment_landmarks)
+        dst_points = np.array(person_landmarks)
+        
+        # Ensure we have enough points for the transformation
+        if len(src_points) < 4 or len(dst_points) < 4:
+            print("Not enough points for transformation. Using simple resize.")
+            return cv2.resize(np.array(garment_img), person_img.size[::-1])
+        
         try:
-            # Try Delaunay triangulation
-            tri = Delaunay(src_points)
+            tform = PiecewiseAffineTransform()
+            tform.estimate(src_points, dst_points)
+            
+            warped_garment = warp(np.array(garment_img), tform, output_shape=person_img.size[::-1])
+            warped_garment = (warped_garment * 255).astype(np.uint8)
+            
+            # Apply the mask to the warped garment
+            warped_mask = warp(garment_mask, tform, output_shape=person_img.size[::-1])
+            warped_mask = (warped_mask > 0.5).astype(np.uint8)
+            
+            result = np.array(person_img)
+            result[warped_mask > 0] = warped_garment[warped_mask > 0]
+            
+            return result
         except Exception as e:
-            print(f"Delaunay triangulation failed: {e}")
-            print("Falling back to convex hull for transformation.")
-            try:
-                # Use convex hull if Delaunay fails
-                hull = ConvexHull(src_points)
-                tri = Delaunay(src_points[hull.vertices])
-            except Exception as e:
-                print(f"Convex hull failed: {e}")
-                print("Using simple interpolation for transformation.")
-                # If both fail, use simple interpolation
-                grid_x, grid_y = np.mgrid[0:person_image.shape[1], 0:person_image.shape[0]]
-                warped_garment = np.zeros_like(person_image)
-                for channel in range(3):
-                    warped_garment[:,:,channel] = griddata(src_points, garment_image[src_points[:,1].astype(int), src_points[:,0].astype(int), channel], (grid_x, grid_y), method='linear', fill_value=0)
-                return warped_garment.astype(np.uint8)
-
-        # Create piecewise affine transform
-        transform = PiecewiseAffineTransform()
-        try:
-            transform.estimate(src_points, dst_points)
-        except Exception as e:
-            print(f"PiecewiseAffineTransform estimation failed: {e}")
+            print(f"Transformation failed: {e}")
             print("Using simple resize as fallback.")
-            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
+            return cv2.resize(np.array(garment_img), person_img.size[::-1])
 
-        # Apply the transform
-        try:
-            warped_garment = warp(garment_image, transform, output_shape=person_image.shape[:2])
-            return (warped_garment * 255).astype(np.uint8)
-        except Exception as e:
-            print(f"Warping failed: {e}")
-            print("Using simple resize as final fallback.")
-            return cv2.resize(garment_image, (person_image.shape[1], person_image.shape[0]))
-
-    def blend_images(self, person_image, warped_garment):
-        mask = cv2.threshold(cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY), 1, 255, cv2.THRESH_BINARY)[1]
-        mask_inv = cv2.bitwise_not(mask)
-        person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
-        garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
-        result = cv2.add(person_bg, garment_fg)
-        return result
-
-    def fit_garment(self, person_image_path, garment_image_path):
-        person_image = cv2.imread(person_image_path)
-        garment_image = cv2.imread(garment_image_path)
-        
-        if person_image is None or garment_image is None:
-            raise ValueError("Failed to load images.")
-        
-        # Segment the garment
-        garment_mask = self.segment_garment(Image.fromarray(cv2.cvtColor(garment_image, cv2.COLOR_BGR2RGB)))
-        
-        # Get landmarks
-        garment_landmarks = self.get_garment_landmarks(garment_image, garment_mask)
-        person_landmarks = self.get_person_landmarks(person_image)
-        
-        # Match landmarks
-        matched_pairs = self.match_landmarks(garment_landmarks, person_landmarks)
-        
-        # Transform garment
-        warped_garment = self.transform_garment(garment_image, person_image, matched_pairs)
-        
-        # Blend images
-        result = self.blend_images(person_image, warped_garment)
-        
-        return result, garment_landmarks, person_landmarks
-
-    def save_result(self, result, output_path):
-        cv2.imwrite(output_path, result)
-        print(f"Result saved to {output_path}")
-
-    def visualize_landmarks(self, image, landmarks, output_path):
-        for name, (x, y) in landmarks.items():
-            cv2.circle(image, (int(x), int(y)), 5, (0, 255, 0), -1)
-            cv2.putText(image, name, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 0), 1)
-        cv2.imwrite(output_path, image)
-        print(f"Landmarks visualization saved to {output_path}")
-
-# Usage
 if __name__ == "__main__":
-    fitter = AdvancedGarmentFitter()
-    person_image_path = "TEST/mota.jpg"
-    garment_image_path = "images/b9.png"
+    masker = Masking()
+    garment_path = "images/b9.png"
+    person_path = "TEST/mota.jpg"
     output_path = "images/output_image.jpg"
+    category = "upper_body"  # Change as needed
     
-    result, garment_landmarks, person_landmarks = fitter.fit_garment(person_image_path, garment_image_path)
-    fitter.save_result(result, output_path)
+    garment_img = Image.open(garment_path)
+    person_img = Image.open(person_path)
     
-    # Visualize landmarks
-    person_image = cv2.imread(person_image_path)
-    garment_image = cv2.imread(garment_image_path)
-    fitter.visualize_landmarks(person_image.copy(), person_landmarks, "person_landmarks.jpg")
-    fitter.visualize_landmarks(garment_image.copy(), garment_landmarks, "garment_landmarks.jpg")
+    result = masker.align_garment(garment_img, person_img, category)
+    
+    Image.fromarray(result).save(output_path)
+    print(f"Aligned garment saved to {output_path}")
