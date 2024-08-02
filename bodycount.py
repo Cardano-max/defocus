@@ -21,8 +21,8 @@ def get_body_landmarks(image):
 def WarpImage_TPS(source, target, img):
     tps = cv2.createThinPlateSplineShapeTransformer()
 
-    source = source.reshape(-1, len(source), 2)
-    target = target.reshape(-1, len(target), 2)
+    source = source.astype(np.float32).reshape(-1, len(source), 2)
+    target = target.astype(np.float32).reshape(-1, len(target), 2)
 
     matches = [cv2.DMatch(i, i, 0) for i in range(len(source[0]))]
 
@@ -70,17 +70,31 @@ def fit_garment(person_image, garment_image):
         (right_shoulder + right_hip) / 2
     ])
 
+    # Ensure garment image has an alpha channel
+    if garment_image.shape[2] == 3:
+        garment_image = cv2.cvtColor(garment_image, cv2.COLOR_BGR2BGRA)
+
     # Warp the garment image
     warped_garment = WarpImage_TPS(source_points, target_points, garment_image)
 
-    # Blend the warped garment with the person image
-    mask = cv2.threshold(cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY)[1]
-    mask_inv = cv2.bitwise_not(mask)
-    person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
-    garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
-    result = cv2.add(person_bg, garment_fg)
+    # Ensure warped garment has the same size as the person image
+    warped_garment = cv2.resize(warped_garment, (person_image.shape[1], person_image.shape[0]))
 
-    return result, warped_garment
+    # Create a mask from the alpha channel of the warped garment
+    mask = warped_garment[:,:,3]
+    mask_inv = cv2.bitwise_not(mask)
+
+    # Split the color channels
+    b, g, r, a = cv2.split(warped_garment)
+    warped_garment_bgr = cv2.merge((b, g, r))
+
+    # Blend the warped garment with the person image
+    for c in range(0, 3):
+        person_image[:, :, c] = (person_image[:, :, c] * (mask_inv / 255.0) + 
+                                 warped_garment_bgr[:, :, c] * (mask / 255.0))
+
+    return person_image, warped_garment
+
 
 # Main execution
 if __name__ == "__main__":
