@@ -1,108 +1,142 @@
 import cv2
 import numpy as np
+import torch
+import torchvision.transforms as T
+from torchvision.models.segmentation import deeplabv3_resnet101
+from PIL import Image
 import mediapipe as mp
 from scipy.spatial import Delaunay
-import torch
-import torch.nn.functional as F
+from skimage.transform import PiecewiseAffineTransform, warp
 
-class GarmentFitter:
+class AdvancedGarmentFitter:
     def __init__(self):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.segmentation_model = self.load_segmentation_model()
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
 
-    def get_landmarks(self, image):
-        results_pose = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        results_face = self.face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    def load_segmentation_model(self):
+        model = deeplabv3_resnet101(pretrained=True)
+        model.eval().to(self.device)
+        return model
+
+    def segment_garment(self, image):
+        transform = T.Compose([
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        input_tensor = transform(image).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            output = self.segmentation_model(input_tensor)['out'][0]
+        mask = output.argmax(0).byte().cpu().numpy()
+        return mask
+
+    def get_garment_landmarks(self, image, mask):
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        largest_contour = max(contours, key=cv2.contourArea)
         
-        landmarks = []
-        if results_pose.pose_landmarks:
-            for lm in results_pose.pose_landmarks.landmark:
-                landmarks.append((int(lm.x * image.shape[1]), int(lm.y * image.shape[0])))
+        # Get key points along the contour
+        epsilon = 0.02 * cv2.arcLength(largest_contour, True)
+        approx = cv2.approxPolyDP(largest_contour, epsilon, True)
         
-        if results_face.multi_face_landmarks:
-            for lm in results_face.multi_face_landmarks[0].landmark:
-                landmarks.append((int(lm.x * image.shape[1]), int(lm.y * image.shape[0])))
+        landmarks = {}
+        for i, point in enumerate(approx):
+            x, y = point[0]
+            landmarks[f'garment_{i}'] = [x, y]
         
-        return np.array(landmarks)
+        return landmarks
 
-    def thin_plate_spline(self, source, target, regularization=0.0):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        source = torch.tensor(source, dtype=torch.float32).to(device)
-        target = torch.tensor(target, dtype=torch.float32).to(device)
-
-        n = source.shape[0]
-        phi = torch.norm(source[:, None] - source[None, :], dim=2)
-        phi = torch.where(phi == 0, torch.tensor(1e-9).to(device), phi)
-        T = torch.log(phi)
-
-        P = torch.ones((n, 3)).to(device)
-        P[:, 1:] = source
-
-        Z = torch.zeros((3, 3)).to(device)
-        L = torch.cat([
-            torch.cat([T, P], dim=1),
-            torch.cat([P.t(), Z], dim=1)
-        ], dim=0)
-
-        Y = torch.cat([target, torch.zeros((3, 2)).to(device)], dim=0)
-
-        L += torch.eye(n+3).to(device) * regularization
-        param = torch.linalg.solve(L, Y).to(device)
-
-        return param
-
-    def apply_tps(self, image, source, target, param):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        height, width = image.shape[:2]
-        grid = torch.meshgrid(torch.arange(height), torch.arange(width))
-        grid = torch.stack(grid[::-1], dim=-1).float().to(device)
-
-        source = torch.tensor(source, dtype=torch.float32).to(device)
-        n = source.shape[0]
-
-        diff = grid.view(-1, 1, 2) - source.view(1, n, 2)
-        phi = torch.norm(diff, dim=2)
-        phi = torch.where(phi == 0, torch.tensor(1e-9).to(device), phi)
-        T = torch.log(phi)
-
-        P = torch.ones((height*width, 3)).to(device)
-        P[:, 1:] = grid.view(-1, 2)
-
-        warped = torch.matmul(T, param[:n]) + torch.matmul(P, param[n:])
-        warped = warped.view(height, width, 2)
-
-        warped_image = F.grid_sample(torch.tensor(image).float().permute(2, 0, 1).unsqueeze(0).to(device),
-                                     warped.unsqueeze(0), align_corners=True)
+    def get_person_landmarks(self, image):
+        results = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        if not results.pose_landmarks:
+            raise ValueError("No pose landmarks detected in the image.")
         
-        return warped_image.squeeze().permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+        landmarks = {}
+        for i, landmark in enumerate(results.pose_landmarks.landmark):
+            landmarks[f'person_{i}'] = [landmark.x * image.shape[1], landmark.y * image.shape[0]]
+        
+        return landmarks
 
-    def fit_garment(self, person_image, garment_image):
-        person_landmarks = self.get_landmarks(person_image)
-        garment_landmarks = self.get_landmarks(garment_image)
+    def match_landmarks(self, garment_landmarks, person_landmarks):
+        # This is a simplified matching. In a real scenario, you'd use a more sophisticated algorithm.
+        matched_pairs = []
+        for g_key, g_point in garment_landmarks.items():
+            closest_p_key = min(person_landmarks, key=lambda p: np.linalg.norm(np.array(g_point) - np.array(person_landmarks[p])))
+            matched_pairs.append((g_point, person_landmarks[closest_p_key]))
+        return np.array(matched_pairs)
 
-        # Ensure we have the same number of landmarks for both images
-        min_landmarks = min(len(person_landmarks), len(garment_landmarks))
-        person_landmarks = person_landmarks[:min_landmarks]
-        garment_landmarks = garment_landmarks[:min_landmarks]
+    def transform_garment(self, garment_image, person_image, matched_pairs):
+        src_points = matched_pairs[:, 0]
+        dst_points = matched_pairs[:, 1]
+        
+        # Create Delaunay triangulation
+        tri = Delaunay(src_points)
+        
+        # Create piecewise affine transform
+        transform = PiecewiseAffineTransform()
+        transform.estimate(src_points, dst_points)
+        
+        # Apply the transform
+        warped_garment = warp(garment_image, transform, output_shape=person_image.shape[:2])
+        
+        return (warped_garment * 255).astype(np.uint8)
 
-        # Compute TPS parameters
-        tps_param = self.thin_plate_spline(garment_landmarks, person_landmarks)
-
-        # Apply TPS transformation
-        warped_garment = self.apply_tps(garment_image, garment_landmarks, person_landmarks, tps_param)
-
-        # Blend the warped garment with the person image
-        mask = np.all(warped_garment != [0, 0, 0], axis=-1)
-        result = np.where(mask[:, :, np.newaxis], warped_garment, person_image)
-
+    def blend_images(self, person_image, warped_garment):
+        mask = cv2.threshold(cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY), 1, 255, cv2.THRESH_BINARY)[1]
+        mask_inv = cv2.bitwise_not(mask)
+        person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
+        garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
+        result = cv2.add(person_bg, garment_fg)
         return result
 
+    def fit_garment(self, person_image_path, garment_image_path):
+        person_image = cv2.imread(person_image_path)
+        garment_image = cv2.imread(garment_image_path)
+        
+        if person_image is None or garment_image is None:
+            raise ValueError("Failed to load images.")
+        
+        # Segment the garment
+        garment_mask = self.segment_garment(Image.fromarray(cv2.cvtColor(garment_image, cv2.COLOR_BGR2RGB)))
+        
+        # Get landmarks
+        garment_landmarks = self.get_garment_landmarks(garment_image, garment_mask)
+        person_landmarks = self.get_person_landmarks(person_image)
+        
+        # Match landmarks
+        matched_pairs = self.match_landmarks(garment_landmarks, person_landmarks)
+        
+        # Transform garment
+        warped_garment = self.transform_garment(garment_image, person_image, matched_pairs)
+        
+        # Blend images
+        result = self.blend_images(person_image, warped_garment)
+        
+        return result, garment_landmarks, person_landmarks
+
+    def save_result(self, result, output_path):
+        cv2.imwrite(output_path, result)
+        print(f"Result saved to {output_path}")
+
+    def visualize_landmarks(self, image, landmarks, output_path):
+        for name, (x, y) in landmarks.items():
+            cv2.circle(image, (int(x), int(y)), 5, (0, 255, 0), -1)
+            cv2.putText(image, name, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 0), 1)
+        cv2.imwrite(output_path, image)
+        print(f"Landmarks visualization saved to {output_path}")
+
+# Usage
 if __name__ == "__main__":
-    fitter = GarmentFitter()
-    person_image = cv2.imread('TEST/mota.jpg')
-    garment_image = cv2.imread('images/b9.png', cv2.IMREAD_UNCHANGED)
+    fitter = AdvancedGarmentFitter()
+    person_image_path = "TEST/mota.jpg"
+    garment_image_path = "images/b9.png"
+    output_path = "images/output_image.jpg"
     
-    result = fitter.fit_garment(person_image, garment_image)
-    cv2.imwrite('result.jpg', result)
+    result, garment_landmarks, person_landmarks = fitter.fit_garment(person_image_path, garment_image_path)
+    fitter.save_result(result, output_path)
+    
+    # Visualize landmarks
+    person_image = cv2.imread(person_image_path)
+    garment_image = cv2.imread(garment_image_path)
+    fitter.visualize_landmarks(person_image.copy(), person_landmarks, "person_landmarks.jpg")
+    fitter.visualize_landmarks(garment_image.copy(), garment_landmarks, "garment_landmarks.jpg")
