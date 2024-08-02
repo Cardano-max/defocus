@@ -1,116 +1,132 @@
 import cv2
 import numpy as np
-import mediapipe as mp
-import replicate
-import os
-import requests
 from PIL import Image
-import io
+import mediapipe as mp
 
 class GarmentFitter:
     def __init__(self):
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
-        self.api_token = os.environ.get("REPLICATE_API_TOKEN")
-        if not self.api_token:
-            raise ValueError("Please set the REPLICATE_API_TOKEN environment variable.")
-        os.environ["REPLICATE_API_TOKEN"] = self.api_token
 
-    def get_person_landmarks(self, image):
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(rgb_image)
+    def detect_body_landmarks(self, image):
+        results = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         if not results.pose_landmarks:
-            raise ValueError("No pose landmarks detected on the person.")
-        h, w, _ = image.shape
-        return {i: (int(lm.x * w), int(lm.y * h)) for i, lm in enumerate(results.pose_landmarks.landmark)}
+            raise ValueError("No body landmarks detected in the image.")
+        return results.pose_landmarks
 
-    def get_garment_landmarks(self, image):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        corners = cv2.goodFeaturesToTrack(gray, 25, 0.01, 10)
-        if corners is None:
-            raise ValueError("No corners detected on the garment.")
-        return np.int0(corners).reshape(-1, 2)
+    def get_body_measurements(self, landmarks, image_shape):
+        # Extract key measurements (simplified for this example)
+        shoulder_left = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER].x * image_shape[1],
+                                  landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER].y * image_shape[0]])
+        shoulder_right = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER].x * image_shape[1],
+                                   landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER].y * image_shape[0]])
+        hip_left = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP].x * image_shape[1],
+                             landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_HIP].y * image_shape[0]])
+        hip_right = np.array([landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP].x * image_shape[1],
+                              landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_HIP].y * image_shape[0]])
 
-    def map_landmarks(self, garment_landmarks, person_landmarks):
-        # Define key points for mapping
-        garment_points = [
-            garment_landmarks[0],  # Top left
-            garment_landmarks[-1],  # Bottom right
-            garment_landmarks[len(garment_landmarks)//2],  # Center
-        ]
-        person_points = [
-            person_landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value],
-            person_landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP.value],
-            person_landmarks[self.mp_pose.PoseLandmark.LEFT_HIP.value],
-        ]
-        return list(zip(garment_points, person_points))
+        shoulder_width = np.linalg.norm(shoulder_right - shoulder_left)
+        hip_width = np.linalg.norm(hip_right - hip_left)
+        torso_height = np.mean([hip_left[1], hip_right[1]]) - np.mean([shoulder_left[1], shoulder_right[1]])
 
-    def apply_perspective_transform(self, src_img, src_points, dst_points):
-        src_points = np.float32(src_points)
-        dst_points = np.float32(dst_points)
-        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-        result = cv2.warpPerspective(src_img, matrix, (src_img.shape[1], src_img.shape[0]))
-        return result
-
-    def run_draggan(self, input_image, source_coords, target_coords):
-        model = "zsxkib/draggan:196f5c18c936529b12dac7fcce3c72e40a73b440d88ebdba8bb1bf0cf8944525"
-        
-        input_data = {
-            "image": input_image,
-            "learning_rate": 0.004,
-            "stylegan2_model": "self_distill/parrots_512_pytorch.pkl",
-            "source_pixel_coords": f"({source_coords[1]}, {source_coords[0]})",
-            "target_pixel_coords": f"({target_coords[1]}, {target_coords[0]})",
-            "maximum_n_iterations": 50,
-            "show_points_and_arrows": True,
+        return {
+            "shoulder_width": shoulder_width,
+            "hip_width": hip_width,
+            "torso_height": torso_height,
+            "shoulder_left": shoulder_left,
+            "shoulder_right": shoulder_right,
+            "hip_left": hip_left,
+            "hip_right": hip_right
         }
 
-        output = replicate.run(model, input=input_data)
-        return output
+    def detect_garment_keypoints(self, garment_image):
+        # This is a placeholder. In a real implementation, you'd use a more sophisticated
+        # method to detect garment keypoints, possibly using a trained model.
+        gray = cv2.cvtColor(garment_image, cv2.COLOR_BGR2GRAY)
+        corners = cv2.goodFeaturesToTrack(gray, 25, 0.01, 10)
+        corners = np.int0(corners)
+        return corners.reshape(-1, 2)
 
-    def download_image(self, url):
-        response = requests.get(url)
-        return Image.open(io.BytesIO(response.content))
+    def map_garment_to_body(self, person_image, garment_image, body_measurements, garment_keypoints):
+        person_height, person_width = person_image.shape[:2]
+        garment_height, garment_width = garment_image.shape[:2]
 
-    def fit_garment(self, garment_image_path, person_image_path, output_path):
-        garment_image = cv2.imread(garment_image_path)
+        # Calculate scaling factors
+        scale_x = body_measurements["shoulder_width"] / garment_width
+        scale_y = body_measurements["torso_height"] / garment_height
+
+        # Create transformation matrix
+        src_points = np.float32([
+            [0, 0],
+            [garment_width - 1, 0],
+            [0, garment_height - 1],
+            [garment_width - 1, garment_height - 1]
+        ])
+
+        dst_points = np.float32([
+            body_measurements["shoulder_left"],
+            body_measurements["shoulder_right"],
+            body_measurements["hip_left"],
+            body_measurements["hip_right"]
+        ])
+
+        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+
+        # Apply the transformation
+        warped_garment = cv2.warpPerspective(garment_image, matrix, (person_width, person_height))
+
+        return warped_garment
+
+    def blend_images(self, person_image, warped_garment):
+        # Create a mask for the warped garment
+        mask = cv2.cvtColor(warped_garment, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+
+        # Invert the mask
+        mask_inv = cv2.bitwise_not(mask)
+
+        # Black-out the area of the garment in the person image
+        person_bg = cv2.bitwise_and(person_image, person_image, mask=mask_inv)
+
+        # Take only the region of the garment from the warped image
+        garment_fg = cv2.bitwise_and(warped_garment, warped_garment, mask=mask)
+
+        # Combine the two images
+        result = cv2.add(person_bg, garment_fg)
+
+        return result
+
+    def fit_garment(self, person_image_path, garment_image_path):
         person_image = cv2.imread(person_image_path)
+        garment_image = cv2.imread(garment_image_path)
 
-        garment_landmarks = self.get_garment_landmarks(garment_image)
-        person_landmarks = self.get_person_landmarks(person_image)
+        if person_image is None or garment_image is None:
+            raise ValueError("Unable to read one or both of the input images.")
 
-        mapped_landmarks = self.map_landmarks(garment_landmarks, person_landmarks)
+        landmarks = self.detect_body_landmarks(person_image)
+        body_measurements = self.get_body_measurements(landmarks, person_image.shape)
+        garment_keypoints = self.detect_garment_keypoints(garment_image)
 
-        # Apply perspective transform
-        transformed_garment = self.apply_perspective_transform(
-            garment_image,
-            [point[0] for point in mapped_landmarks],
-            [point[1] for point in mapped_landmarks]
-        )
+        warped_garment = self.map_garment_to_body(person_image, garment_image, body_measurements, garment_keypoints)
+        result = self.blend_images(person_image, warped_garment)
 
-        # Fine-tune with DragGAN
-        for src, dst in mapped_landmarks:
-            output_url = self.run_draggan(transformed_garment, src, dst)
-            transformed_garment = np.array(self.download_image(output_url))
+        return result
 
-        # Blend the transformed garment with the person image
-        mask = np.zeros(person_image.shape[:2], np.uint8)
-        bgdModel = np.zeros((1,65), np.float64)
-        fgdModel = np.zeros((1,65), np.float64)
-        rect = (50, 50, person_image.shape[1]-100, person_image.shape[0]-100)
-        cv2.grabCut(transformed_garment, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)
-        mask2 = np.where((mask==2)|(mask==0), 0, 1).astype('uint8')
-        transformed_garment = transformed_garment*mask2[:,:,np.newaxis]
-
-        result = cv2.addWeighted(person_image, 0.7, transformed_garment, 0.3, 0)
-
-        cv2.imwrite(output_path, result)
-        print(f"Fitted garment saved to {output_path}")
+    def visualize_keypoints(self, image, keypoints):
+        for point in keypoints:
+            x, y = point.ravel()
+            cv2.circle(image, (int(x), int(y)), 3, 255, -1)
+        return image
 
 if __name__ == "__main__":
     fitter = GarmentFitter()
-    garment_image_path = "images/b9.png"
+    
     person_image_path = "TEST/mota.jpg"
-    output_path = "images/"
-
-    fitter.fit_garment(garment_image_path, person_image_path, output_path)
+    garment_image_path = "images/b9.png"
+    
+    try:
+        result = fitter.fit_garment(person_image_path, garment_image_path)
+        cv2.imwrite("fitted_garment.jpg", result)
+        print("Garment fitting completed. Result saved as 'fitted_garment.jpg'")
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
