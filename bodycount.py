@@ -1,115 +1,62 @@
 import cv2
 import numpy as np
-import mediapipe as mp
 
-def get_face_landmarks(image):
-    mp_face_mesh = mp.solutions.face_mesh
-    with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5) as face_mesh:
-        results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        if not results.multi_face_landmarks:
-            return None
-        return np.array([(lm.x * image.shape[1], lm.y * image.shape[0]) for lm in results.multi_face_landmarks[0].landmark])
-
-def get_body_landmarks(image):
-    mp_pose = mp.solutions.pose
-    with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
-        results = pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        if not results.pose_landmarks:
-            return None
-        return np.array([(lm.x * image.shape[1], lm.y * image.shape[0]) for lm in results.pose_landmarks.landmark])
-
-def WarpImage_TPS(source, target, img):
+def tps_warp(src_image, src_points, dst_points):
     tps = cv2.createThinPlateSplineShapeTransformer()
 
-    source = source.astype(np.float32).reshape(-1, len(source), 2)
-    target = target.astype(np.float32).reshape(-1, len(target), 2)
+    src_points = src_points.astype(np.float32).reshape(1, -1, 2)
+    dst_points = dst_points.astype(np.float32).reshape(1, -1, 2)
 
-    matches = [cv2.DMatch(i, i, 0) for i in range(len(source[0]))]
+    matches = [cv2.DMatch(i, i, 0) for i in range(len(src_points[0]))]
 
-    tps.estimateTransformation(target, source, matches)
-    new_img = tps.warpImage(img)
+    tps.estimateTransformation(dst_points, src_points, matches)
+    warped_image = tps.warpImage(src_image)
 
-    return new_img
+    return warped_image
 
-def fit_garment(person_image, garment_image):
-    # Get person landmarks
-    face_landmarks = get_face_landmarks(person_image)
-    body_landmarks = get_body_landmarks(person_image)
-    
-    if face_landmarks is None or body_landmarks is None:
-        raise ValueError("Could not detect face or body landmarks")
+def main():
+    # Load the image
+    image_path = 'images/b9.jpg'  # Replace with your image path
+    image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
 
-    # Define key points for garment fitting
-    left_shoulder = body_landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-    right_shoulder = body_landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-    left_hip = body_landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value]
-    right_hip = body_landmarks[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value]
+    if image is None:
+        print(f"Failed to load image from {image_path}")
+        return
 
-    # Define source points on the garment
-    garment_height, garment_width = garment_image.shape[:2]
-    source_points = np.array([
+    # Get image dimensions
+    height, width = image.shape[:2]
+
+    # Define source points (corners of the image)
+    src_points = np.array([
         [0, 0],
-        [garment_width, 0],
-        [0, garment_height],
-        [garment_width, garment_height],
-        [garment_width/2, 0],
-        [garment_width/2, garment_height],
-        [0, garment_height/2],
-        [garment_width, garment_height/2]
+        [width - 1, 0],
+        [width - 1, height - 1],
+        [0, height - 1],
+        [width // 2, height // 2]  # Center point
     ])
 
-    # Define target points on the person
-    target_points = np.array([
-        left_shoulder,
-        right_shoulder,
-        left_hip,
-        right_hip,
-        (left_shoulder + right_shoulder) / 2,
-        (left_hip + right_hip) / 2,
-        (left_shoulder + left_hip) / 2,
-        (right_shoulder + right_hip) / 2
+    # Define destination points (where you want the corners to move)
+    # This example will "pinch" the image towards the center
+    dst_points = np.array([
+        [width * 0.1, height * 0.1],  # Top-left moved inwards
+        [width * 0.9, height * 0.1],  # Top-right moved inwards
+        [width * 0.9, height * 0.9],  # Bottom-right moved inwards
+        [width * 0.1, height * 0.9],  # Bottom-left moved inwards
+        [width // 2, height // 2]  # Center point (unchanged)
     ])
 
-    # Ensure garment image has an alpha channel
-    if garment_image.shape[2] == 3:
-        garment_image = cv2.cvtColor(garment_image, cv2.COLOR_BGR2BGRA)
+    # Apply TPS warping
+    warped_image = tps_warp(image, src_points, dst_points)
 
-    # Warp the garment image
-    warped_garment = WarpImage_TPS(source_points, target_points, garment_image)
+    # Save the result
+    cv2.imwrite('warped_image.png', warped_image)
+    print("Warped image saved as 'warped_image.png'")
 
-    # Ensure warped garment has the same size as the person image
-    warped_garment = cv2.resize(warped_garment, (person_image.shape[1], person_image.shape[0]))
+    # Display the original and warped images
+    cv2.imshow('Original Image', image)
+    cv2.imshow('Warped Image', warped_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
-    # Create a mask from the alpha channel of the warped garment
-    mask = warped_garment[:,:,3]
-    mask_inv = cv2.bitwise_not(mask)
-
-    # Split the color channels
-    b, g, r, a = cv2.split(warped_garment)
-    warped_garment_bgr = cv2.merge((b, g, r))
-
-    # Blend the warped garment with the person image
-    for c in range(0, 3):
-        person_image[:, :, c] = (person_image[:, :, c] * (mask_inv / 255.0) + 
-                                 warped_garment_bgr[:, :, c] * (mask / 255.0))
-
-    return person_image, warped_garment
-
-
-# Main execution
 if __name__ == "__main__":
-    # Load images
-    person_image = cv2.imread('TEST/mota.jpg')
-    garment_image = cv2.imread('images/b9.png', cv2.IMREAD_UNCHANGED)
-
-    # Fit garment
-    try:
-        result, warped_garment = fit_garment(person_image, garment_image)
-        
-        # Save results
-        cv2.imwrite('fitted_garment.jpg', result)
-        cv2.imwrite('warped_garment.png', warped_garment)
-        
-        print("Processing completed. Check 'fitted_garment.jpg' and 'warped_garment.png' for results.")
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
+    main()
