@@ -101,8 +101,8 @@ class GarmentFitter:
 
 if __name__ == "__main__":
     fitter = GarmentFitter()
-    person_image = cv2.imread('path_to_person_image.jpg')
-    garment_image = cv2.imread('path_to_garment_image.png', cv2.IMREAD_UNCHANGED)
+    person_image = cv2.imread('TEST/mota.jpg')
+    garment_image = cv2.imread('images/b9.png', cv2.IMREAD_UNCHANGED)
     
     result = fitter.fit_garment(person_image, garment_image)
     cv2.imwrite('result.jpg', result)
