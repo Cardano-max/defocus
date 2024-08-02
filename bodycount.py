@@ -129,6 +129,11 @@ class Masking:
             return cv2.resize(np.array(garment_img), person_img.size[::-1])
         
         try:
+            # Ensure src_points and dst_points have the same number of points
+            min_points = min(len(src_points), len(dst_points))
+            src_points = src_points[:min_points]
+            dst_points = dst_points[:min_points]
+            
             tform = PiecewiseAffineTransform()
             tform.estimate(src_points, dst_points)
             
@@ -148,6 +153,8 @@ class Masking:
             print("Using simple resize as fallback.")
             return cv2.resize(np.array(garment_img), person_img.size[::-1])
 
+
+    
 if __name__ == "__main__":
     masker = Masking()
     garment_path = "images/b9.png"
@@ -155,10 +162,20 @@ if __name__ == "__main__":
     output_path = "images/output_image.jpg"
     category = "upper_body"  # Change as needed
     
-    garment_img = Image.open(garment_path)
-    person_img = Image.open(person_path)
-    
-    result = masker.align_garment(garment_img, person_img, category)
-    
-    Image.fromarray(result).save(output_path)
-    print(f"Aligned garment saved to {output_path}")
+    try:
+        garment_img = Image.open(garment_path).convert("RGB")
+        person_img = Image.open(person_path).convert("RGB")
+        
+        result = masker.align_garment(garment_img, person_img, category)
+        
+        # Convert result to RGB if it's RGBA
+        if result.shape[2] == 4:
+            result = result[:, :, :3]
+        
+        Image.fromarray(result).save(output_path)
+        print(f"Aligned garment saved to {output_path}")
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        print("Traceback:")
+        import traceback
+        traceback.print_exc()
