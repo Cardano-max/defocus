@@ -16,7 +16,7 @@ def tps_warp(src_image, src_points, dst_points):
 
 def main():
     # Load the image
-    image_path = 'images/b9.jpg'  # Replace with your image path
+    image_path = 'images/b9.png'  # Replace with your image path
     image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
 
     if image is None:
