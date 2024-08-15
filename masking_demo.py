@@ -6,7 +6,7 @@ from functools import wraps
 from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
-import os
+from pathlib import Path
 
 def timing(f):
     @wraps(f)
@@ -110,22 +110,25 @@ class Masking:
 
 def process_images(input_folder, output_folder, category):
     masker = Masking()
-
-    # Get all image files in the input folder
-    image_files = [f for f in os.listdir(input_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-
+    
+    # Create output folder if it doesn't exist
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
+    
+    # Get all image files from the input folder
+    image_files = list(Path(input_folder).glob('*'))
+    image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
+    
     for i, image_file in enumerate(image_files, 1):
-        input_path = os.path.join(input_folder, image_file)
-        output_mask = os.path.join(output_folder, f"output_sharp_mask_{i}.png")
-        output_masked = os.path.join(output_folder, f"output_masked_image_white_bg_{i}.png")
-
-        print(f"Processing image {i}/{len(image_files)}: {image_file}")
-
-        input_img = Image.open(input_path)
+        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
+        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
+        
+        print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
+        
+        input_img = Image.open(image_file)
         
         mask = masker.get_mask(input_img, category=category)
         
-        Image.fromarray(mask).save(output_mask)
+        Image.fromarray(mask).save(str(output_mask))
         
         # Create a white background image
         white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
@@ -137,14 +140,15 @@ def process_images(input_folder, output_folder, category):
         # Create a new image with white background and paste the masked input image
         masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
         
-        masked_output.save(output_masked)
+        masked_output.save(str(output_masked))
         
         print(f"Mask saved to {output_mask}")
         print(f"Masked output with white background saved to {output_masked}")
+        print()
 
 if __name__ == "__main__":
-    input_folder = "/Test2"
-    output_folder = "/Test2/output"
+    input_folder = Path("/Test2")
+    output_folder = Path("/Test2/output")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
-    process_images(input_folder, output_folder, category)
+    process_images(str(input_folder), str(output_folder), category)
