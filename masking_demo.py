@@ -147,10 +147,8 @@ def process_images(input_folder, output_folder, category):
         print()
 
 if __name__ == "__main__":
-    # Use a directory in the user's home folder
-    home = Path.home()
-    input_folder = home / "arbi-tryon" / "Test2"
-    output_folder = home / "arbi-tryon" / "Test2"
+    input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/Input_Images")
+    output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
