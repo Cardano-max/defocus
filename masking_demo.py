@@ -110,9 +110,6 @@ class Masking:
 
 def process_images(input_folder, output_folder, category):
     masker = Masking()
-    
-    # Create output folder if it doesn't exist
-    os.makedirs(output_folder, exist_ok=True)
 
     # Get all image files in the input folder
     image_files = [f for f in os.listdir(input_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
