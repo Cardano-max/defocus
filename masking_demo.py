@@ -146,8 +146,8 @@ def process_images(input_folder, output_folder, category):
         print(f"Masked output with white background saved to {output_masked}")
 
 if __name__ == "__main__":
-    input_folder = "/images"
-    output_folder = "/images/output"
+    input_folder = "/Test2"
+    output_folder = "/Test2/output"
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(input_folder, output_folder, category)
