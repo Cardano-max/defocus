@@ -147,8 +147,10 @@ def process_images(input_folder, output_folder, category):
         print()
 
 if __name__ == "__main__":
-    input_folder = Path("/Test2")
-    output_folder = Path("/Test2/output")
+    # Use a directory in the user's home folder
+    home = Path.home()
+    input_folder = home / "arbi-tryon" / "Test2"
+    output_folder = home / "arbi-tryon" / "Test2"
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
