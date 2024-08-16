@@ -7,6 +7,9 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
+from skimage import measure
+from scipy import ndimage
+from rembg import remove
 
 def timing(f):
     @wraps(f)
@@ -54,15 +57,20 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        # Remove all body parts except clothes
+        body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
+                      self.label_map["left_leg"], self.label_map["right_leg"],
+                      self.label_map["head"], self.label_map["neck"]]
+        body_mask = np.isin(parse_array, body_parts)
         hand_mask = self.create_hand_mask(img_np)
-        arm_hand_mask = np.logical_or(arm_mask, hand_mask)
-        mask = np.logical_and(mask, np.logical_not(arm_hand_mask))
+        body_hand_mask = np.logical_or(body_mask, hand_mask)
+        mask = np.logical_and(mask, np.logical_not(body_hand_mask))
 
         mask = self.refine_mask(mask)
+        mask = self.smooth_edges(mask)
 
         mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
-        mask_pil = mask_pil.resize(img.size, Image.NEAREST)
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
@@ -74,16 +82,19 @@ class Masking:
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
+                hand_points = []
                 for landmark in hand_landmarks.landmark:
                     x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    cv2.circle(hand_mask, (x, y), 15, 255, -1)
+                    hand_points.append([x, y])
+                hand_points = np.array(hand_points, dtype=np.int32)
+                cv2.fillPoly(hand_mask, [hand_points], 255)
         
         return hand_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        kernel = np.ones((3,3), np.uint8)
+        kernel = np.ones((5,5), np.uint8)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
         
@@ -96,6 +107,12 @@ class Masking:
             mask_refined = mask_uint8
         
         return mask_refined > 0
+
+    def smooth_edges(self, mask, sigma=1.5):
+        mask_float = mask.astype(float)
+        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
+        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
+        return mask_smooth
 
     @staticmethod
     def hole_fill(img):
@@ -121,6 +138,7 @@ def process_images(input_folder, output_folder, category):
     for i, image_file in enumerate(image_files, 1):
         output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
         output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
+        output_upscaled = Path(output_folder) / f"output_upscaled_8k_{i}.png"
         
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
         
@@ -140,10 +158,20 @@ def process_images(input_folder, output_folder, category):
         # Create a new image with white background and paste the masked input image
         masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
         
-        masked_output.save(str(output_masked))
+        # Remove background using rembg for better results
+        masked_output_removed_bg = remove(np.array(masked_output))
+        masked_output_removed_bg = Image.fromarray(masked_output_removed_bg)
+        
+        masked_output_removed_bg.save(str(output_masked))
+        
+        # Upscale to 8K resolution
+        target_size = (7680, 4320)  # 8K resolution
+        upscaled_output = masked_output_removed_bg.resize(target_size, Image.LANCZOS)
+        upscaled_output.save(str(output_upscaled))
         
         print(f"Mask saved to {output_mask}")
         print(f"Masked output with white background saved to {output_masked}")
+        print(f"Upscaled 8K output saved to {output_upscaled}")
         print()
 
 if __name__ == "__main__":
