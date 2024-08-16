@@ -125,7 +125,7 @@ class Masking:
         dst = cv2.bitwise_or(img_copy, img_inverse)
         return dst
 
-def process_images(input_folder, output_folder, category):
+def process_images(input_folder, output_folder, category, output_format='png'):
     masker = Masking()
     
     # Create output folder if it doesn't exist
@@ -133,16 +133,16 @@ def process_images(input_folder, output_folder, category):
     
     # Get all image files from the input folder
     image_files = list(Path(input_folder).glob('*'))
-    image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
+    image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')]
     
     for i, image_file in enumerate(image_files, 1):
-        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
-        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
-        output_upscaled = Path(output_folder) / f"output_upscaled_8k_{i}.png"
+        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.{output_format}"
+        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.{output_format}"
+        output_upscaled = Path(output_folder) / f"output_upscaled_8k_{i}.{output_format}"
         
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
         
-        input_img = Image.open(image_file)
+        input_img = Image.open(image_file).convert('RGB')
         
         mask = masker.get_mask(input_img, category=category)
         
@@ -151,10 +151,6 @@ def process_images(input_folder, output_folder, category):
         # Create a white background image
         white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
         
-        # Convert input image to RGBA if it's not already
-        if input_img.mode != 'RGBA':
-            input_img = input_img.convert('RGBA')
-        
         # Create a new image with white background and paste the masked input image
         masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
         
@@ -162,12 +158,19 @@ def process_images(input_folder, output_folder, category):
         masked_output_removed_bg = remove(np.array(masked_output))
         masked_output_removed_bg = Image.fromarray(masked_output_removed_bg)
         
-        masked_output_removed_bg.save(str(output_masked))
+        if output_format.lower() == 'webp':
+            masked_output_removed_bg.save(str(output_masked), format='WebP', lossless=True)
+        else:
+            masked_output_removed_bg.save(str(output_masked))
         
         # Upscale to 8K resolution
         target_size = (7680, 4320)  # 8K resolution
         upscaled_output = masked_output_removed_bg.resize(target_size, Image.LANCZOS)
-        upscaled_output.save(str(output_upscaled))
+        
+        if output_format.lower() == 'webp':
+            upscaled_output.save(str(output_upscaled), format='WebP', lossless=True)
+        else:
+            upscaled_output.save(str(output_upscaled))
         
         print(f"Mask saved to {output_mask}")
         print(f"Masked output with white background saved to {output_masked}")
@@ -178,5 +181,6 @@ if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/Input_Images")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
+    output_format = "webp"  # Change this to "png" if you prefer PNG output
     
-    process_images(str(input_folder), str(output_folder), category)
+    process_images(str(input_folder), str(output_folder), category, output_format)
