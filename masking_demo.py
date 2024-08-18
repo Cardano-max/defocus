@@ -34,7 +34,7 @@ class Masking:
 
     def get_mask(self, img, category='upper_body'):
         # Resize image to 512x512 for processing
-        img_resized = img.resize((512, 512), Image.LANCZOS)
+        img_resized = img.resize((384, 512), Image.LANCZOS)
         img_np = np.array(img_resized)
         
         # Get human parsing result
