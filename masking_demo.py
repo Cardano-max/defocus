@@ -58,24 +58,16 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create body part masks
         body_mask = self.create_body_mask(img_np, parse_array)
         hand_mask = self.create_hand_mask(img_np)
         
-        # Combine body part masks
         combined_body_mask = np.logical_or(body_mask, hand_mask)
-        
-        # Remove body parts from the garment mask
         mask = np.logical_and(mask, np.logical_not(combined_body_mask))
 
-        # Refine the mask
         mask = self.refine_mask(mask)
         mask = self.smooth_edges(mask)
-
-        # Ensure the mask covers the full garment
         mask = self.fill_garment_gaps(mask, parse_array, category)
-
-        # Additional refinement steps
+        mask = self.prioritize_hands(mask, hand_mask)
         mask = self.post_process_mask(mask)
 
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
@@ -89,17 +81,15 @@ class Masking:
                     self.label_map["head"], self.label_map["neck"]]
         body_mask = np.isin(parse_array, body_parts).astype(np.uint8) * 255
         
-        # Use MediaPipe Pose to refine body mask
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         results = self.pose.process(image_rgb)
         if results.pose_landmarks:
             h, w = image.shape[:2]
             for landmark in results.pose_landmarks.landmark:
                 x, y = int(landmark.x * w), int(landmark.y * h)
-                cv2.circle(body_mask, (x, y), 15, 255, -1)
+                cv2.circle(body_mask, (x, y), 20, 255, -1)
         
-        # Dilate the body mask to ensure complete coverage
-        kernel = np.ones((7, 7), np.uint8)
+        kernel = np.ones((9, 9), np.uint8)
         body_mask = cv2.dilate(body_mask, kernel, iterations=2)
         
         return body_mask > 0
@@ -112,28 +102,37 @@ class Masking:
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                hand_points = []
-                for landmark in hand_landmarks.landmark:
-                    x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    hand_points.append([x, y])
-                hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
-                
-                # Dilate the hand mask to ensure complete coverage
-                kernel = np.ones((7, 7), np.uint8)
-                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+                hand_mask = self.draw_hand_mask(hand_mask, hand_landmarks, image.shape[:2])
+        
+        skin_mask = self.detect_skin(image)
+        hand_mask = cv2.bitwise_or(hand_mask, skin_mask)
+        
+        kernel = np.ones((7, 7), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=3)
         
         return hand_mask > 0
+
+    def draw_hand_mask(self, mask, landmarks, shape):
+        height, width = shape
+        points = [(int(landmark.x * width), int(landmark.y * height)) for landmark in landmarks.landmark]
+        hull = cv2.convexHull(np.array(points))
+        cv2.fillConvexPoly(mask, hull, 255)
+        return mask
+
+    def detect_skin(self, image):
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+        upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        return skin_mask
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        # Apply morphological operations
-        kernel = np.ones((5,5), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        kernel = np.ones((7,7), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=3)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=2)
         
-        # Find contours and keep only the largest one
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
@@ -144,7 +143,7 @@ class Masking:
         
         return mask_refined > 0
 
-    def smooth_edges(self, mask, sigma=2.0):
+    def smooth_edges(self, mask, sigma=2.5):
         mask_float = mask.astype(float)
         mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
@@ -160,16 +159,15 @@ class Masking:
                               self.label_map["pants"], self.label_map["skirt"]]
         
         garment_region = np.isin(parse_array, garment_labels)
-        
-        # Use the garment region to fill gaps in the mask
         filled_mask = np.logical_or(mask, garment_region)
-        
-        # Remove small isolated regions
         filled_mask = self.remove_small_regions(filled_mask)
         
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=200):
+    def prioritize_hands(self, garment_mask, hand_mask):
+        return np.logical_and(garment_mask, np.logical_not(hand_mask))
+
+    def remove_small_regions(self, mask, min_size=300):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
             region = (labeled == i)
@@ -178,15 +176,9 @@ class Masking:
         return mask
 
     def post_process_mask(self, mask):
-        # Fill holes
         mask = ndimage.binary_fill_holes(mask)
-        
-        # Remove small objects
         mask = morphology.remove_small_objects(mask, min_size=500)
-        
-        # Smooth boundaries
         mask = self.smooth_edges(mask, sigma=1.5)
-        
         return mask
 
     @staticmethod
@@ -203,10 +195,8 @@ class Masking:
 def process_images(input_folder, output_folder, category):
     masker = Masking()
     
-    # Create output folder if it doesn't exist
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     
-    # Get all image files from the input folder
     image_files = list(Path(input_folder).glob('*'))
     image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
     
@@ -222,14 +212,11 @@ def process_images(input_folder, output_folder, category):
         
         Image.fromarray(mask).save(str(output_mask))
         
-        # Create a white background image
         white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
         
-        # Convert input image to RGBA if it's not already
         if input_img.mode != 'RGBA':
             input_img = input_img.convert('RGBA')
         
-        # Create a new image with white background and paste the masked input image
         masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
         
         masked_output.save(str(output_masked))
