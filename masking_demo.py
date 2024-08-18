@@ -140,19 +140,29 @@ def process_images(input_folder, output_folder, category, output_format='png'):
         output_masked = Path(output_folder) / f"output_masked_{i}.{output_format}"
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
 
-        input_img = Image.open(image_file).convert('RGB')
-        mask = masker.get_mask(input_img, category=category)
+        input_img = Image.open(image_file).convert('RGBA')
+        
+        # Resize input image to 384x512 for processing
+        input_img_resized = input_img.resize((384, 512), Image.Resampling.LANCZOS)
+        
+        mask = masker.get_mask(input_img_resized, category=category)
+        
+        # Resize mask back to original image size
+        mask = Image.fromarray(mask.astype(np.uint8) * 255)
+        mask = mask.resize(input_img.size, Image.Resampling.LANCZOS)
+        mask = np.array(mask) / 255
 
-        # Convert mask to RGB (255 for white, 0 for black)
-        mask_rgb = np.stack((mask,)*3, axis=-1) * 255
+        # Create an alpha channel from the mask
+        alpha = (mask * 255).astype(np.uint8)
 
-        # Create a new image with the garment visible and the rest transparent
-        result = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
-        result[:,:,:3] = np.array(input_img.resize((mask.shape[1], mask.shape[0]), Image.Resampling.LANCZOS))
-        result[:,:,3] = mask * 255
+        # Get the RGB channels from the input image
+        rgb = np.array(input_img.convert('RGB'))
 
-        # Convert result to PIL Image
-        result_img = Image.fromarray(result)
+        # Create the final RGBA image
+        rgba = np.dstack((rgb, alpha))
+
+        # Convert to PIL Image
+        result_img = Image.fromarray(rgba)
 
         if output_format.lower() == 'webp':
             result_img.save(str(output_masked), format='WebP', lossless=True)
