@@ -12,6 +12,8 @@ from scipy import ndimage
 from rembg import remove
 import torch
 import torchvision.transforms as T
+from skimage import draw, measure
+
 
 def timing(f):
     @wraps(f)
@@ -42,7 +44,7 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Image.LANCZOS)
+        img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
@@ -152,8 +154,8 @@ class Masking:
         # Additional edge refinement using active contours
         contours = measure.find_contours(mask_smooth, 0.5)
         for contour in contours:
-            yy, xx = skimage.draw.polygon(contour[:, 0], contour[:, 1])
-            mask_smooth[yy, xx] = 1
+            rr, cc = draw.polygon(contour[:, 0], contour[:, 1], mask_smooth.shape)
+            mask_smooth[rr, cc] = 1
         
         return mask_smooth
 
@@ -232,7 +234,7 @@ def process_images(input_folder, output_folder, category, output_format='png'):
         
         # Resize to exactly 8K if needed
         target_size = (7680, 4320)  # 8K resolution
-        upscaled_output = upscaled_output.resize(target_size, Image.LANCZOS)
+        upscaled_output = masked_output_removed_bg.resize(target_size, Image.Resampling.LANCZOS)
         
         if output_format.lower() == 'webp':
             upscaled_output.save(str(output_upscaled), format='WebP', lossless=True)
