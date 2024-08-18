@@ -193,7 +193,7 @@ def check_image_quality(image):
 
 def virtual_try_on(clothes_image, person_image, category_input):
     try:
-        # Process and cache the garment image
+        # Process and cache the garment image for efficiency
         processed_clothes = process_and_cache_garment(clothes_image)
 
         # Check person image quality and restore if necessary
@@ -207,11 +207,12 @@ def virtual_try_on(clothes_image, person_image, category_input):
         else:
             person_pil = person_image
 
-        # Save the user-uploaded person image
+        # Save the user-uploaded person image for reference
         person_image_path = os.path.join(modules.config.path_outputs, f"person_image_{int(time.time())}.png")
         person_pil.save(person_image_path)
         print(f"User-uploaded person image saved at: {person_image_path}")
 
+        # Map user-friendly category names to internal category codes
         categories = {
             "Upper Body": "upper_body",
             "Lower Body": "lower_body",
@@ -219,13 +220,14 @@ def virtual_try_on(clothes_image, person_image, category_input):
         }
         print(f"Category Input: {category_input}")
         
+        # Get the appropriate category, defaulting to "upper_body" if not found
         category = categories.get(category_input, "upper_body")
         print(f"Using category: {category}")
         
-        # Generate mask using the updated Masking class
+        # Generate mask using the Masking class
         inpaint_mask = masker.get_mask(person_pil, category=category)
 
-        # Get the original dimensions
+        # Get the original dimensions of the person image
         orig_person_h, orig_person_w = person_image.shape[:2]
 
         # Calculate the aspect ratio of the person image
@@ -247,7 +249,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Set the aspect ratio for the model
         aspect_ratio = f"{target_width}×{target_height}"
 
-        # Display and save the mask
+        # Display and save the mask for visualization
         plt.figure(figsize=(10, 10))
         plt.imshow(inpaint_mask, cmap='gray')
         plt.axis('off')
@@ -264,97 +266,108 @@ def virtual_try_on(clothes_image, person_image, category_input):
 
         os.environ['MASKED_IMAGE_PATH'] = masked_image_path
 
-        # Generate dynamic inpaint prompt
+        # Generate dynamic inpaint prompt based on the clothes and person images
         inpaint_prompt = generate_inpaint_prompt(processed_clothes, person_image)
         print(f"Generated inpaint prompt: {inpaint_prompt}")
 
-        # Define loras here
+        # Define loras (model fine-tuning parameters)
         loras = []
         for lora in modules.config.default_loras:
             loras.extend(lora)
 
+        # Prepare arguments for the image generation task
         args = [
-            True,
-            "",
-            modules.config.default_prompt_negative,
-            False,
-            modules.config.default_styles,
-            Performance.QUALITY.value,
-            aspect_ratio,
-            1,
-            modules.config.default_output_format,
-            random.randint(constants.MIN_SEED, constants.MAX_SEED),
-            modules.config.default_sample_sharpness,
-            modules.config.default_cfg_scale,
-            modules.config.default_base_model_name,
-            modules.config.default_refiner_model_name,
-            modules.config.default_refiner_switch,
+            True,  # Input image checkbox
+            "",    # Prompt (empty as we're using inpaint_prompt)
+            modules.config.default_prompt_negative,  # Negative prompt
+            False,  # Advanced checkbox
+            modules.config.default_styles,  # Style selections
+            Performance.QUALITY.value,  # Performance selection
+            aspect_ratio,  # Aspect ratio selection
+            1,  # Image number
+            modules.config.default_output_format,  # Output format
+            random.randint(constants.MIN_SEED, constants.MAX_SEED),  # Random seed
+            modules.config.default_sample_sharpness,  # Sharpness
+            modules.config.default_cfg_scale,  # Guidance scale
+            modules.config.default_base_model_name,  # Base model
+            modules.config.default_refiner_model_name,  # Refiner model
+            modules.config.default_refiner_switch,  # Refiner switch
         ] + loras + [
-            True,
-            "inpaint",
-            flags.disabled,
-            None,
-            [],
-            {'image': person_image, 'mask': inpaint_mask},
-            "wearing a new garment",
-            inpaint_mask,
-            True,
-            True,
-            modules.config.default_black_out_nsfw,
-            1.5,
-            0.8,
-            0.3,
-            modules.config.default_cfg_tsnr,
-            modules.config.default_sampler,
-            modules.config.default_scheduler,
-            -1,
-            -1,
-            target_width,
-            target_height,
-            -1,
-            modules.config.default_overwrite_upscale,
-            False,
-            True,
-            False,
-            False,
-            100,
-            200,
-            flags.refiner_swap_method,
-            0.5,
-            False,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            False,
-            False,
-            modules.config.default_inpaint_engine_version,
-            1.0,
-            0.618,
-            False,
-            False,
-            0,
-            modules.config.default_save_metadata_to_images,
-            modules.config.default_metadata_scheme,
+            True,  # Current tab (set to True for inpainting)
+            "inpaint",  # Inpaint mode
+            flags.disabled,  # UOV method
+            None,  # UOV input image
+            [],  # Outpaint selections
+            {'image': person_image, 'mask': inpaint_mask},  # Inpaint input image
+            inpaint_prompt,  # Inpaint additional prompt
+            inpaint_mask,  # Inpaint mask image
+            True,  # Disable preview
+            True,  # Disable intermediate results
+            modules.config.default_black_out_nsfw,  # Black out NSFW
+            1.5,  # Positive ADM guidance
+            0.8,  # Negative ADM guidance
+            0.3,  # ADM guidance end
+            modules.config.default_cfg_tsnr,  # CFG mimicking from TSNR
+            modules.config.default_sampler,  # Sampler name
+            modules.config.default_scheduler,  # Scheduler name
+            -1,  # Overwrite step
+            -1,  # Overwrite switch
+            target_width,  # Overwrite width
+            target_height,  # Overwrite height
+            -1,  # Overwrite vary strength
+            modules.config.default_overwrite_upscale,  # Overwrite upscale strength
+            False,  # Mixing image prompt and vary upscale
+            True,  # Mixing image prompt and inpaint
+            False,  # Debugging CN preprocessor
+            False,  # Skipping CN preprocessor
+            100,  # Canny low threshold
+            200,  # Canny high threshold
+            flags.refiner_swap_method,  # Refiner swap method
+            0.5,  # ControlNet softness
+            False,  # FreeU enabled
+            1.0,  # FreeU b1
+            1.0,  # FreeU b2
+            1.0,  # FreeU s1
+            1.0,  # FreeU s2
+            False,  # Debugging inpaint preprocessor
+            False,  # Inpaint disable initial latent
+            modules.config.default_inpaint_engine_version,  # Inpaint engine
+            1.0,  # Inpaint strength
+            0.618,  # Inpaint respective field
+            False,  # Inpaint mask upload checkbox
+            False,  # Invert mask checkbox
+            0,  # Inpaint erode or dilate
+            modules.config.default_save_metadata_to_images,  # Save metadata to images
+            modules.config.default_metadata_scheme,  # Metadata scheme
         ]
 
+        # Add clothes image parameters
         args.extend([
-            processed_clothes,
-            0.86,
-            0.97,
-            flags.default_ip,
+            processed_clothes,  # Clothes image
+            0.86,  # Stop at
+            0.97,  # Weight
+            flags.default_ip,  # Default IP
         ])
 
+        # Create and append the image generation task
         task = worker.AsyncTask(args=args)
         worker.async_tasks.append(task)
 
+        # Wait for the task to start processing
         while not task.processing:
             time.sleep(0.1)
+        # Wait for the task to finish processing
         while task.processing:
             time.sleep(0.1)
 
+        # Check if results were generated successfully
         if task.results and isinstance(task.results, list) and len(task.results) > 0:
-            return {"success": True, "image_path": task.results[0], "masked_image_path": masked_image_path, "person_image_path": person_image_path}
+            return {
+                "success": True, 
+                "image_path": task.results[0],  # Path to the generated image
+                "masked_image_path": masked_image_path,  # Path to the mask visualization
+                "person_image_path": person_image_path  # Path to the original person image
+            }
         else:
             return {"success": False, "error": "No results generated"}
 
