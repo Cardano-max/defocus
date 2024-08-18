@@ -165,7 +165,7 @@ def process_images(input_folder, output_folder, masking_instance):
 
     for image_file in tqdm(image_files, desc="Processing images"):
         input_path = os.path.join(input_folder, image_file)
-        output_path = os.path.join(output_folder, f"masked_{image_file}")
+        output_path = os.path.join(output_folder, f"masked_{os.path.splitext(image_file)[0]}.png")
         
         img = Image.open(input_path).convert("RGB")
         
@@ -174,7 +174,7 @@ def process_images(input_folder, output_folder, masking_instance):
         category = 'upper_body'  # or 'lower_body' or 'dresses'
         
         _, garment_mask = masking_instance.get_mask(img, category)
-        garment_mask.save(output_path)
+        garment_mask.save(output_path, 'PNG')
 
 if __name__ == "__main__":
     input_folder = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im"
