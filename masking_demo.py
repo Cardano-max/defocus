@@ -7,9 +7,8 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure
+from skimage import measure, morphology
 from scipy import ndimage
-from PIL import Image
 from PIL.Image import Resampling
 
 def timing(f):
@@ -76,8 +75,11 @@ class Masking:
         # Ensure the mask covers the full garment
         mask = self.fill_garment_gaps(mask, parse_array, category)
 
+        # Additional refinement steps
+        mask = self.post_process_mask(mask)
+
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
         
         return np.array(mask_pil)
 
@@ -94,7 +96,11 @@ class Masking:
             h, w = image.shape[:2]
             for landmark in results.pose_landmarks.landmark:
                 x, y = int(landmark.x * w), int(landmark.y * h)
-                cv2.circle(body_mask, (x, y), 10, 255, -1)
+                cv2.circle(body_mask, (x, y), 15, 255, -1)
+        
+        # Dilate the body mask to ensure complete coverage
+        kernel = np.ones((7, 7), np.uint8)
+        body_mask = cv2.dilate(body_mask, kernel, iterations=2)
         
         return body_mask > 0
 
@@ -112,6 +118,10 @@ class Masking:
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
+                
+                # Dilate the hand mask to ensure complete coverage
+                kernel = np.ones((7, 7), np.uint8)
+                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
 
@@ -120,8 +130,8 @@ class Masking:
         
         # Apply morphological operations
         kernel = np.ones((5,5), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=2)
         
         # Find contours and keep only the largest one
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -134,7 +144,7 @@ class Masking:
         
         return mask_refined > 0
 
-    def smooth_edges(self, mask, sigma=1.5):
+    def smooth_edges(self, mask, sigma=2.0):
         mask_float = mask.astype(float)
         mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
@@ -159,12 +169,24 @@ class Masking:
         
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=100):
+    def remove_small_regions(self, mask, min_size=200):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
             region = (labeled == i)
             if np.sum(region) < min_size:
                 mask[region] = 0
+        return mask
+
+    def post_process_mask(self, mask):
+        # Fill holes
+        mask = ndimage.binary_fill_holes(mask)
+        
+        # Remove small objects
+        mask = morphology.remove_small_objects(mask, min_size=500)
+        
+        # Smooth boundaries
+        mask = self.smooth_edges(mask, sigma=1.5)
+        
         return mask
 
     @staticmethod
