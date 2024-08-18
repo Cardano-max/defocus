@@ -48,6 +48,7 @@ class Masking:
         keypoints = self.openpose_model(img_resized)
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
+        # Initial garment mask
         if category == 'upper_body':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
         elif category == 'lower_body':
@@ -58,8 +59,8 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create body part masks
-        body_mask = self.create_body_mask(img_np, parse_array)
+        # Improved body part detection
+        body_mask = self.create_body_mask(img_np, parse_array, pose_data)
         hand_mask = self.create_hand_mask(img_np)
         
         # Combine body part masks
@@ -76,26 +77,24 @@ class Masking:
         mask = self.fill_garment_gaps(mask, parse_array, category)
 
         # Additional refinement steps
-        mask = self.post_process_mask(mask)
+        mask = self.post_process_mask(mask, img_np, parse_array)
 
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
         
         return np.array(mask_pil)
 
-    def create_body_mask(self, image, parse_array):
+    def create_body_mask(self, image, parse_array, pose_data):
         body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
                     self.label_map["left_leg"], self.label_map["right_leg"],
                     self.label_map["head"], self.label_map["neck"]]
         body_mask = np.isin(parse_array, body_parts).astype(np.uint8) * 255
         
-        # Use MediaPipe Pose to refine body mask
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(image_rgb)
-        if results.pose_landmarks:
-            h, w = image.shape[:2]
-            for landmark in results.pose_landmarks.landmark:
-                x, y = int(landmark.x * w), int(landmark.y * h)
+        # Use pose data to refine body mask
+        h, w = image.shape[:2]
+        for point in pose_data:
+            if point[0] > 0 and point[1] > 0:
+                x, y = int(point[0]), int(point[1])
                 cv2.circle(body_mask, (x, y), 15, 255, -1)
         
         # Dilate the body mask to ensure complete coverage
@@ -177,15 +176,26 @@ class Masking:
                 mask[region] = 0
         return mask
 
-    def post_process_mask(self, mask):
-        # Fill holes
+    def post_process_mask(self, mask, image, parse_array):
+        # Previous post-processing steps
         mask = ndimage.binary_fill_holes(mask)
-        
-        # Remove small objects
         mask = morphology.remove_small_objects(mask, min_size=500)
-        
-        # Smooth boundaries
         mask = self.smooth_edges(mask, sigma=1.5)
+        
+        # Consistency check with original parsing
+        garment_parse = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                            self.label_map["pants"], self.label_map["skirt"]])
+        inconsistent = np.logical_xor(mask, garment_parse)
+        
+        # Use grabcut for edge refinement in inconsistent areas
+        grabcut_mask = np.where(inconsistent, cv2.GC_PR_FGD, cv2.GC_FGD)
+        bgdModel = np.zeros((1,65),np.float64)
+        fgdModel = np.zeros((1,65),np.float64)
+        rect = (0,0,image.shape[1]-1,image.shape[0]-1)
+        cv2.grabCut(image, grabcut_mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+        
+        # Update mask with grabcut results
+        mask = np.where((grabcut_mask==2)|(grabcut_mask==0), 0, 1).astype('uint8')
         
         return mask
 
