@@ -80,7 +80,7 @@ class Masking:
         mask = self.remove_small_regions(mask)
 
         mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
-        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        mask_pil = mask_pil.resize(img.size, Image.Resampling.LANCZOS)
         
         return np.array(mask_pil)
 
@@ -216,25 +216,9 @@ def process_images(input_folder, output_folder, category, output_format='png'):
         else:
             masked_output_removed_bg.save(str(output_masked))
         
-        # Upscale to 8K resolution using a super-resolution model
-        sr_model = torch.hub.load('xinntao/ESRGAN-PyTorch', 'RRDBNet_arch', pretrained=True)
-        sr_model.eval().to(masker.device)
-        
-        transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-        
-        img_tensor = transform(masked_output_removed_bg).unsqueeze(0).to(masker.device)
-        with torch.no_grad():
-            output = sr_model(img_tensor)
-        
-        output = output.squeeze().cpu().clamp(0, 1).permute(1, 2, 0).numpy()
-        upscaled_output = Image.fromarray((output * 255).astype(np.uint8))
-        
-        # Resize to exactly 8K if needed
+        # Upscale to 8K resolution using a simple bicubic interpolation
         target_size = (7680, 4320)  # 8K resolution
-        upscaled_output = masked_output_removed_bg.resize(target_size, Image.Resampling.LANCZOS)
+        upscaled_output = masked_output_removed_bg.resize(target_size, Image.BICUBIC)
         
         if output_format.lower() == 'webp':
             upscaled_output.save(str(output_upscaled), format='WebP', lossless=True)
