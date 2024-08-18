@@ -187,12 +187,32 @@ class Masking:
                                             self.label_map["pants"], self.label_map["skirt"]])
         inconsistent = np.logical_xor(mask, garment_parse)
         
-        # Use grabcut for edge refinement in inconsistent areas
-        grabcut_mask = np.where(inconsistent, cv2.GC_PR_FGD, cv2.GC_FGD)
+        # Prepare grabcut mask
+        grabcut_mask = np.where(inconsistent, cv2.GC_PR_FGD, cv2.GC_FGD).astype(np.uint8)
+        
+        # Ensure image is in the correct format (8-bit, 3-channel)
+        if image.dtype != np.uint8:
+            image = (image * 255).astype(np.uint8)
+        if len(image.shape) == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        
+        # Initialize background and foreground models
         bgdModel = np.zeros((1,65),np.float64)
         fgdModel = np.zeros((1,65),np.float64)
-        rect = (0,0,image.shape[1]-1,image.shape[0]-1)
-        cv2.grabCut(image, grabcut_mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+        
+        # Define ROI for grabcut
+        rect = (0, 0, image.shape[1]-1, image.shape[0]-1)
+        
+        # Apply grabcut
+        try:
+            cv2.grabCut(image, grabcut_mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+        except cv2.error as e:
+            print(f"GrabCut error: {str(e)}")
+            print(f"Image shape: {image.shape}, dtype: {image.dtype}")
+            print(f"Mask shape: {grabcut_mask.shape}, dtype: {grabcut_mask.dtype}")
+            return mask  # Return the original mask if grabcut fails
         
         # Update mask with grabcut results
         mask = np.where((grabcut_mask==2)|(grabcut_mask==0), 0, 1).astype('uint8')
