@@ -10,6 +10,7 @@ from pathlib import Path
 from skimage import measure, morphology, segmentation, feature
 from scipy import ndimage
 from PIL.Image import Resampling
+from scipy import ndimage as ndi
 
 
 def timing(f):
@@ -41,15 +42,19 @@ class Masking:
     @timing
     def get_mask(self, img, category='upper_body'):
         try:
+            print(f"Processing image for category: {category}")
             img_resized = img.resize((384, 512), Resampling.LANCZOS)
             img_np = np.array(img_resized)
             
+            print("Running parsing model...")
             parse_result, _ = self.parsing_model(img_resized)
             parse_array = np.array(parse_result)
 
+            print("Running OpenPose model...")
             keypoints = self.openpose_model(img_resized)
             pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
+            print("Creating initial mask...")
             if category == 'upper_body':
                 mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
             elif category == 'lower_body':
@@ -60,27 +65,39 @@ class Masking:
             else:
                 raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
+            print("Creating body mask...")
             body_mask = self.create_body_mask(img_np, parse_array)
+            print("Creating hand mask...")
             hand_mask = self.create_hand_mask(img_np)
             
             combined_body_mask = np.logical_or(body_mask, hand_mask)
             mask = np.logical_and(mask, np.logical_not(combined_body_mask))
 
+            print("Refining mask...")
             mask = self.refine_mask(mask)
+            print("Smoothing edges...")
             mask = self.smooth_edges(mask)
+            print("Filling garment gaps...")
             mask = self.fill_garment_gaps(mask, parse_array, category)
+            print("Post-processing mask...")
             mask = self.post_process_mask(mask)
             mask = np.logical_and(mask, np.logical_not(hand_mask))
 
+            print("Applying GrabCut...")
             mask = self.apply_grabcut(img_np, mask)
+            print("Final refinement...")
             mask = self.final_refinement(mask)
 
+            print("Creating final mask image...")
             mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
             mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
             
+            print("Mask creation completed.")
             return np.array(mask_pil)
         except Exception as e:
             print(f"Error in get_mask: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def create_body_mask(self, image, parse_array):
@@ -189,20 +206,38 @@ class Masking:
         return np.where((mask_gc == 2) | (mask_gc == 0), 0, 1).astype('uint8')
 
     def final_refinement(self, mask):
-        distance = ndimage.distance_transform_edt(mask)
-        local_maxi = feature.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=mask)
-        markers = measure.label(local_maxi)
-        labels = segmentation.watershed(-distance, markers, mask=mask)
-        
-        refined_mask = np.zeros_like(mask)
-        for label in np.unique(labels):
-            if label == 0:
-                continue
-            region = labels == label
-            if np.sum(region) > 1000:  # Adjust this threshold as needed
-                refined_mask = np.logical_or(refined_mask, region)
-        
-        return refined_mask
+        try:
+            print("Starting final refinement...")
+            distance = ndi.distance_transform_edt(mask)
+            print("Distance transform completed.")
+            
+            # Remove the 'indices' parameter
+            local_maxi = feature.peak_local_max(distance, footprint=np.ones((3, 3)), labels=mask)
+            print("Local maxima found.")
+            
+            markers = np.zeros(distance.shape, dtype=bool)
+            markers[tuple(local_maxi.T)] = True
+            markers = measure.label(markers)
+            print("Markers created.")
+            
+            labels = segmentation.watershed(-distance, markers, mask=mask)
+            print("Watershed segmentation completed.")
+            
+            refined_mask = np.zeros_like(mask)
+            for label in np.unique(labels):
+                if label == 0:
+                    continue
+                region = labels == label
+                if np.sum(region) > 1000:  # Adjust this threshold as needed
+                    refined_mask = np.logical_or(refined_mask, region)
+            
+            print("Final refinement completed.")
+            return refined_mask
+        except Exception as e:
+            print(f"Error in final_refinement: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return mask  # Return the original mask if refinement fails
 
     @staticmethod
     def hole_fill(img):
