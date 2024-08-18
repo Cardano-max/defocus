@@ -9,6 +9,8 @@ from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure
 from scipy import ndimage
+from PIL import Image
+from PIL.Image import Resampling
 
 def timing(f):
     @wraps(f)
@@ -38,7 +40,7 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Image.LANCZOS)
+        img_resized = img.resize((384, 512), Resampling.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
@@ -53,7 +55,7 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["pants"], self.label_map["skirt"]])
+                                        self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
@@ -74,16 +76,16 @@ class Masking:
         # Ensure the mask covers the full garment
         mask = self.fill_garment_gaps(mask, parse_array, category)
 
-        mask_pil = Image.fromarray(mask.astype(np.uint8) * 255)
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
     def create_body_mask(self, image, parse_array):
         body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
-                      self.label_map["left_leg"], self.label_map["right_leg"],
-                      self.label_map["head"], self.label_map["neck"]]
-        body_mask = np.isin(parse_array, body_parts)
+                    self.label_map["left_leg"], self.label_map["right_leg"],
+                    self.label_map["head"], self.label_map["neck"]]
+        body_mask = np.isin(parse_array, body_parts).astype(np.uint8) * 255
         
         # Use MediaPipe Pose to refine body mask
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -92,9 +94,9 @@ class Masking:
             h, w = image.shape[:2]
             for landmark in results.pose_landmarks.landmark:
                 x, y = int(landmark.x * w), int(landmark.y * h)
-                cv2.circle(body_mask, (x, y), 10, 1, -1)
+                cv2.circle(body_mask, (x, y), 10, 255, -1)
         
-        return body_mask
+        return body_mask > 0
 
     def create_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
