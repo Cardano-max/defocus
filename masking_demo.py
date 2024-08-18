@@ -7,9 +7,10 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology, segmentation
+from skimage import measure, morphology, segmentation, feature
 from scipy import ndimage
 from PIL.Image import Resampling
+
 
 def timing(f):
     @wraps(f)
@@ -39,44 +40,48 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Resampling.LANCZOS)
-        img_np = np.array(img_resized)
-        
-        parse_result, _ = self.parsing_model(img_resized)
-        parse_array = np.array(parse_result)
+        try:
+            img_resized = img.resize((384, 512), Resampling.LANCZOS)
+            img_np = np.array(img_resized)
+            
+            parse_result, _ = self.parsing_model(img_resized)
+            parse_array = np.array(parse_result)
 
-        keypoints = self.openpose_model(img_resized)
-        pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
+            keypoints = self.openpose_model(img_resized)
+            pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
-        if category == 'upper_body':
-            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
-        elif category == 'lower_body':
-            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
-        elif category == 'dresses':
-            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                        self.label_map["pants"], self.label_map["skirt"]])
-        else:
-            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
+            if category == 'upper_body':
+                mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
+            elif category == 'lower_body':
+                mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+            elif category == 'dresses':
+                mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                            self.label_map["pants"], self.label_map["skirt"]])
+            else:
+                raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        body_mask = self.create_body_mask(img_np, parse_array)
-        hand_mask = self.create_hand_mask(img_np)
-        
-        combined_body_mask = np.logical_or(body_mask, hand_mask)
-        mask = np.logical_and(mask, np.logical_not(combined_body_mask))
+            body_mask = self.create_body_mask(img_np, parse_array)
+            hand_mask = self.create_hand_mask(img_np)
+            
+            combined_body_mask = np.logical_or(body_mask, hand_mask)
+            mask = np.logical_and(mask, np.logical_not(combined_body_mask))
 
-        mask = self.refine_mask(mask)
-        mask = self.smooth_edges(mask)
-        mask = self.fill_garment_gaps(mask, parse_array, category)
-        mask = self.post_process_mask(mask)
-        mask = np.logical_and(mask, np.logical_not(hand_mask))
+            mask = self.refine_mask(mask)
+            mask = self.smooth_edges(mask)
+            mask = self.fill_garment_gaps(mask, parse_array, category)
+            mask = self.post_process_mask(mask)
+            mask = np.logical_and(mask, np.logical_not(hand_mask))
 
-        mask = self.apply_grabcut(img_np, mask)
-        mask = self.final_refinement(mask)
+            mask = self.apply_grabcut(img_np, mask)
+            mask = self.final_refinement(mask)
 
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
-        
-        return np.array(mask_pil)
+            mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+            mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
+            
+            return np.array(mask_pil)
+        except Exception as e:
+            print(f"Error in get_mask: {str(e)}")
+            raise
 
     def create_body_mask(self, image, parse_array):
         body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
@@ -185,7 +190,7 @@ class Masking:
 
     def final_refinement(self, mask):
         distance = ndimage.distance_transform_edt(mask)
-        local_maxi = segmentation.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=mask)
+        local_maxi = feature.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=mask)
         markers = measure.label(local_maxi)
         labels = segmentation.watershed(-distance, markers, mask=mask)
         
