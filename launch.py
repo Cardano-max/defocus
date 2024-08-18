@@ -126,4 +126,4 @@ config.default_base_model_name, config.checkpoint_downloads = download_models(
     config.embeddings_downloads, config.lora_downloads)
 
 
-from webui2 import *
+from webui import *
