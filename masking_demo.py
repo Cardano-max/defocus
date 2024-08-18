@@ -23,16 +23,20 @@ class ImprovedMasking:
         }
 
     def get_mask(self, img, category='upper_body'):
-        # Resize image to 512x512 for processing
-        img_resized = img.resize((512, 512), Image.LANCZOS)
-        img_np = np.array(img_resized)
+        # Resize image to 512x384 for OpenPose
+        img_resized_openpose = img.resize((384, 512), Image.LANCZOS)
+        
+        # Resize image to 512x512 for human parsing
+        img_resized_parsing = img.resize((512, 512), Image.LANCZOS)
+        
+        img_np = np.array(img_resized_parsing)
         
         # Get human parsing result
-        parse_result, _ = self.parsing_model(img_resized)
+        parse_result, _ = self.parsing_model(img_resized_parsing)
         parse_array = np.array(parse_result)
 
         # Get pose estimation
-        keypoints = self.openpose_model(img_resized)
+        keypoints = self.openpose_model(img_resized_openpose)
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
         # Create initial mask based on category
@@ -83,15 +87,16 @@ class ImprovedMasking:
 
     def create_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(image_rgb)
+        image_rgb_resized = cv2.resize(image_rgb, (384, 512))
+        results = self.hands.process(image_rgb_resized)
         
-        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        hand_mask = np.zeros((512, 512), dtype=np.uint8)
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
                 hand_points = []
                 for landmark in hand_landmarks.landmark:
-                    x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
+                    x, y = int(landmark.x * 384), int(landmark.y * 512)
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 255)
@@ -104,15 +109,16 @@ class ImprovedMasking:
 
     def create_face_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.face_mesh.process(image_rgb)
+        image_rgb_resized = cv2.resize(image_rgb, (384, 512))
+        results = self.face_mesh.process(image_rgb_resized)
         
-        face_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        face_mask = np.zeros((512, 512), dtype=np.uint8)
         
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
                 face_points = []
                 for landmark in face_landmarks.landmark:
-                    x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
+                    x, y = int(landmark.x * 384), int(landmark.y * 512)
                     face_points.append([x, y])
                 face_points = np.array(face_points, dtype=np.int32)
                 cv2.fillPoly(face_mask, [face_points], 255)
