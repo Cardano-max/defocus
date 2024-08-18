@@ -150,7 +150,7 @@ def process_images(input_folder, output_folder, category, output_format='png'):
         print()
 
 if __name__ == "__main__":
-    input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/Input_Images")
+    input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
     category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     output_format = "png"
