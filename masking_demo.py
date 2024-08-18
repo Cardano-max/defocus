@@ -7,10 +7,12 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology, segmentation, feature
+from skimage import measure, morphology
 from scipy import ndimage
 from PIL.Image import Resampling
-from scipy import ndimage as ndi
+import mediapipe as mp
+import numpy as np
+import cv2
 
 
 def timing(f):
@@ -41,64 +43,41 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        try:
-            print(f"Processing image for category: {category}")
-            img_resized = img.resize((384, 512), Resampling.LANCZOS)
-            img_np = np.array(img_resized)
-            
-            print("Running parsing model...")
-            parse_result, _ = self.parsing_model(img_resized)
-            parse_array = np.array(parse_result)
+        img_resized = img.resize((384, 512), Resampling.LANCZOS)
+        img_np = np.array(img_resized)
+        
+        parse_result, _ = self.parsing_model(img_resized)
+        parse_array = np.array(parse_result)
 
-            print("Running OpenPose model...")
-            keypoints = self.openpose_model(img_resized)
-            pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
+        keypoints = self.openpose_model(img_resized)
+        pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
-            print("Creating initial mask...")
-            if category == 'upper_body':
-                mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
-            elif category == 'lower_body':
-                mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
-            elif category == 'dresses':
-                mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                            self.label_map["pants"], self.label_map["skirt"]])
-            else:
-                raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
+        if category == 'upper_body':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
+        elif category == 'lower_body':
+            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+        elif category == 'dresses':
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                        self.label_map["pants"], self.label_map["skirt"]])
+        else:
+            raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-            print("Creating body mask...")
-            body_mask = self.create_body_mask(img_np, parse_array)
-            print("Creating hand mask...")
-            hand_mask = self.create_hand_mask(img_np)
-            
-            combined_body_mask = np.logical_or(body_mask, hand_mask)
-            mask = np.logical_and(mask, np.logical_not(combined_body_mask))
+        body_mask = self.create_body_mask(img_np, parse_array)
+        hand_mask = self.create_hand_mask(img_np)
+        
+        combined_body_mask = np.logical_or(body_mask, hand_mask)
+        mask = np.logical_and(mask, np.logical_not(combined_body_mask))
 
-            print("Refining mask...")
-            mask = self.refine_mask(mask)
-            print("Smoothing edges...")
-            mask = self.smooth_edges(mask)
-            print("Filling garment gaps...")
-            mask = self.fill_garment_gaps(mask, parse_array, category)
-            print("Post-processing mask...")
-            mask = self.post_process_mask(mask)
-            mask = np.logical_and(mask, np.logical_not(hand_mask))
+        mask = self.refine_mask(mask)
+        mask = self.smooth_edges(mask)
+        mask = self.fill_garment_gaps(mask, parse_array, category)
+        mask = self.prioritize_hands(mask, hand_mask)
+        mask = self.post_process_mask(mask)
 
-            print("Applying GrabCut...")
-            mask = self.apply_grabcut(img_np, mask)
-            print("Final refinement...")
-            mask = self.final_refinement(mask)
-
-            print("Creating final mask image...")
-            mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-            mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
-            
-            print("Mask creation completed.")
-            return np.array(mask_pil)
-        except Exception as e:
-            print(f"Error in get_mask: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            raise
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
+        
+        return np.array(mask_pil)
 
     def create_body_mask(self, image, parse_array):
         body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
@@ -127,26 +106,36 @@ class Masking:
         
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                hand_points = []
-                for landmark in hand_landmarks.landmark:
-                    x, y = int(landmark.x * image.shape[1]), int(landmark.y * image.shape[0])
-                    hand_points.append([x, y])
-                hand_points = np.array(hand_points, dtype=np.int32)
-                
-                hull = cv2.convexHull(hand_points)
-                cv2.fillConvexPoly(hand_mask, hull, 255)
-                
-                kernel = np.ones((15, 15), np.uint8)
-                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+                hand_mask = self.draw_hand_mask(hand_mask, hand_landmarks, image.shape[:2])
+        
+        skin_mask = self.detect_skin(image)
+        hand_mask = cv2.bitwise_or(hand_mask, skin_mask)
+        
+        kernel = np.ones((7, 7), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=3)
         
         return hand_mask > 0
+
+    def draw_hand_mask(self, mask, landmarks, shape):
+        height, width = shape
+        points = [(int(landmark.x * width), int(landmark.y * height)) for landmark in landmarks.landmark]
+        hull = cv2.convexHull(np.array(points))
+        cv2.fillConvexPoly(mask, hull, 255)
+        return mask
+
+    def detect_skin(self, image):
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+        upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
+        return skin_mask
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        kernel = np.ones((7, 7), np.uint8)
+        kernel = np.ones((7,7), np.uint8)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=3)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=3)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=2)
         
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
@@ -179,6 +168,9 @@ class Masking:
         
         return filled_mask
 
+    def prioritize_hands(self, garment_mask, hand_mask):
+        return np.logical_and(garment_mask, np.logical_not(hand_mask))
+
     def remove_small_regions(self, mask, min_size=300):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
@@ -192,52 +184,6 @@ class Masking:
         mask = morphology.remove_small_objects(mask, min_size=500)
         mask = self.smooth_edges(mask, sigma=1.5)
         return mask
-
-    def apply_grabcut(self, image, mask):
-        mask_gc = np.zeros(image.shape[:2], np.uint8)
-        mask_gc[mask > 0] = cv2.GC_PR_FGD
-        mask_gc[mask == 0] = cv2.GC_PR_BGD
-        
-        bgdModel = np.zeros((1, 65), np.float64)
-        fgdModel = np.zeros((1, 65), np.float64)
-        
-        mask_gc, _, _ = cv2.grabCut(image, mask_gc, None, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
-        
-        return np.where((mask_gc == 2) | (mask_gc == 0), 0, 1).astype('uint8')
-
-    def final_refinement(self, mask):
-        try:
-            print("Starting final refinement...")
-            distance = ndi.distance_transform_edt(mask)
-            print("Distance transform completed.")
-            
-            # Remove the 'indices' parameter
-            local_maxi = feature.peak_local_max(distance, footprint=np.ones((3, 3)), labels=mask)
-            print("Local maxima found.")
-            
-            markers = np.zeros(distance.shape, dtype=bool)
-            markers[tuple(local_maxi.T)] = True
-            markers = measure.label(markers)
-            print("Markers created.")
-            
-            labels = segmentation.watershed(-distance, markers, mask=mask)
-            print("Watershed segmentation completed.")
-            
-            refined_mask = np.zeros_like(mask)
-            for label in np.unique(labels):
-                if label == 0:
-                    continue
-                region = labels == label
-                if np.sum(region) > 1000:  # Adjust this threshold as needed
-                    refined_mask = np.logical_or(refined_mask, region)
-            
-            print("Final refinement completed.")
-            return refined_mask
-        except Exception as e:
-            print(f"Error in final_refinement: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return mask  # Return the original mask if refinement fails
 
     @staticmethod
     def hole_fill(img):
