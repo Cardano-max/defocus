@@ -6,7 +6,6 @@ import mediapipe as mp
 from functools import wraps
 from time import time
 from pathlib import Path
-from rembg import remove
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 
@@ -144,22 +143,21 @@ def process_images(input_folder, output_folder, category, output_format='png'):
         input_img = Image.open(image_file).convert('RGB')
         mask = masker.get_mask(input_img, category=category)
 
-        # Create a new image with transparent background where the mask is 0
-        masked_output = Image.new('RGBA', input_img.size, (0, 0, 0, 0))
-        input_img_rgba = input_img.convert('RGBA')
-        mask_rgba = Image.fromarray(mask).convert('L')
+        # Convert mask to RGB (255 for white, 0 for black)
+        mask_rgb = np.stack((mask,)*3, axis=-1) * 255
 
-        # Paste the original image onto the new image using the mask
-        masked_output.paste(input_img_rgba, (0, 0), mask_rgba)
+        # Create a new image with the garment visible and the rest transparent
+        result = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+        result[:,:,:3] = np.array(input_img.resize((mask.shape[1], mask.shape[0]), Image.Resampling.LANCZOS))
+        result[:,:,3] = mask * 255
 
-        # Remove background using rembg for better results
-        masked_output_removed_bg = remove(np.array(masked_output))
-        masked_output_removed_bg = Image.fromarray(masked_output_removed_bg)
+        # Convert result to PIL Image
+        result_img = Image.fromarray(result)
 
         if output_format.lower() == 'webp':
-            masked_output_removed_bg.save(str(output_masked), format='WebP', lossless=True)
+            result_img.save(str(output_masked), format='WebP', lossless=True)
         else:
-            masked_output_removed_bg.save(str(output_masked))
+            result_img.save(str(output_masked))
 
         print(f"Masked output saved to {output_masked}")
         print()
