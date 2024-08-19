@@ -9,7 +9,7 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology
+from skimage import measure, morphology, filters
 from scipy import ndimage
 
 def timing(f):
@@ -38,9 +38,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.99,
-            min_hand_presence_confidence=0.99,
-            min_tracking_confidence=0.99
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -70,6 +70,9 @@ class Masking:
         
         # Combine hand and arm masks without dilation
         hand_arm_mask = np.logical_or(hand_mask, arm_mask)
+        
+        # Enhance garment mask
+        mask = self.enhance_garment_mask(img_np, mask)
         
         # Remove hand and arm regions from the garment mask
         mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
@@ -109,6 +112,32 @@ class Masking:
         
         return hand_mask > 0
 
+    def enhance_garment_mask(self, image, initial_mask):
+        # Convert image to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply edge detection
+        edges = cv2.Canny(gray, 50, 150)
+        
+        # Dilate edges to connect nearby edges
+        kernel = np.ones((3,3), np.uint8)
+        dilated_edges = cv2.dilate(edges, kernel, iterations=1)
+        
+        # Find contours
+        contours, _ = cv2.findContours(dilated_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Create a mask from the contours
+        contour_mask = np.zeros_like(gray)
+        cv2.drawContours(contour_mask, contours, -1, 255, 1)
+        
+        # Combine the initial mask with the contour mask
+        combined_mask = np.logical_or(initial_mask, contour_mask > 0)
+        
+        # Fill holes in the combined mask
+        filled_mask = ndimage.binary_fill_holes(combined_mask)
+        
+        return filled_mask
+
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
@@ -130,7 +159,7 @@ class Masking:
 
     def smooth_edges(self, mask, sigma=0.5):
         mask_float = mask.astype(float)
-        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
+        mask_blurred = filters.gaussian(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
         return mask_smooth
 
