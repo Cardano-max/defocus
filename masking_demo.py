@@ -22,7 +22,6 @@ def timing(f):
         return result
     return wrap
 
-
 class Masking:
     def __init__(self):
         self.parsing_model = Parsing(-1)
@@ -88,6 +87,27 @@ class Masking:
         
         return np.array(mask_pil)
 
+    def create_body_mask(self, image, parse_array):
+        body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
+                    self.label_map["left_leg"], self.label_map["right_leg"],
+                    self.label_map["head"], self.label_map["neck"]]
+        body_mask = np.isin(parse_array, body_parts).astype(np.uint8) * 255
+        
+        # Use MediaPipe Pose to refine body mask
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(image_rgb)
+        if results.pose_landmarks:
+            h, w = image.shape[:2]
+            for landmark in results.pose_landmarks.landmark:
+                x, y = int(landmark.x * w), int(landmark.y * h)
+                cv2.circle(body_mask, (x, y), 15, 255, -1)
+        
+        # Dilate the body mask to ensure complete coverage
+        kernel = np.ones((7, 7), np.uint8)
+        body_mask = cv2.dilate(body_mask, kernel, iterations=2)
+        
+        return body_mask > 0
+
     def create_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         results = self.hands.process(image_rgb)
@@ -126,7 +146,6 @@ class Masking:
         skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
 
         return skin_mask > 0
-
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
