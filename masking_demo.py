@@ -65,36 +65,32 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
+        # Create hand mask
         hand_mask = self.create_precise_hand_mask(img_np)
+        
+        # Create arm mask (including exposed skin)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Combine hand and arm masks
-        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
+        # Create neck mask
+        neck_mask = parse_array == self.label_map["neck"]
         
-        # Dilate the hand and arm mask slightly
-        kernel = np.ones((3,3), np.uint8)
-        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=1)
+        # Combine garment, arm, and neck masks
+        full_garment_mask = np.logical_or(mask, arm_mask)
+        full_garment_mask = np.logical_or(full_garment_mask, neck_mask)
         
-        # Remove hand and arm regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+        # Refine the full garment mask
+        full_garment_mask = self.refine_mask(full_garment_mask)
+        full_garment_mask = self.smooth_edges(full_garment_mask, sigma=1.0)
+        full_garment_mask = self.fill_garment_gaps(full_garment_mask, parse_array, category)
+        full_garment_mask = self.expand_mask(full_garment_mask)
 
-        # Refine the mask
-        mask = self.refine_mask(mask)
-        mask = self.smooth_edges(mask, sigma=1.0)
+        # Remove hand regions from the full garment mask
+        final_mask = np.logical_and(full_garment_mask, np.logical_not(hand_mask))
 
-        # Ensure the mask covers the full garment
-        mask = self.fill_garment_gaps(mask, parse_array, category)
-
-        # Expand the mask slightly
-        mask = self.expand_mask(mask)
-
-        # Reapply hand and arm mask to ensure they're not covered
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
-
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        final_mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
+        final_mask_pil = final_mask_pil.resize(img.size, Image.LANCZOS)
         
-        return np.array(mask_pil)
+        return np.array(final_mask_pil)
 
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -113,22 +109,27 @@ class Masking:
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
+                
+            # Dilate the hand mask slightly to ensure complete coverage
+            kernel = np.ones((5,5), np.uint8)
+            hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
         
         return hand_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        # Apply minimal morphological operations
-        kernel = np.ones((3,3), np.uint8)
+        # Apply morphological operations
+        kernel = np.ones((5,5), np.uint8)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
         
         # Find contours and keep only the largest one
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
             mask_refined = np.zeros_like(mask_uint8)
-            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 2)  # Slightly thicker outline
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 3)  # Thicker outline
             mask_refined = cv2.fillPoly(mask_refined, [largest_contour], 255)
         else:
             mask_refined = mask_uint8
@@ -143,12 +144,14 @@ class Masking:
 
     def fill_garment_gaps(self, mask, parse_array, category):
         if category == 'upper_body':
-            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"]]
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
+                              self.label_map["left_arm"], self.label_map["right_arm"], self.label_map["neck"]]
         elif category == 'lower_body':
             garment_labels = [self.label_map["pants"], self.label_map["skirt"]]
         else:  # dresses
             garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
-                              self.label_map["pants"], self.label_map["skirt"]]
+                              self.label_map["pants"], self.label_map["skirt"],
+                              self.label_map["left_arm"], self.label_map["right_arm"], self.label_map["neck"]]
         
         garment_region = np.isin(parse_array, garment_labels)
         
