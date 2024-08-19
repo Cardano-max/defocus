@@ -9,8 +9,10 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology, filters, segmentation, color
+from skimage import measure, morphology, filters, segmentation, color, feature
 from scipy import ndimage
+from PIL import Image
+
 
 def timing(f):
     @wraps(f)
@@ -46,7 +48,7 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Image.LANCZOS)
+        img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
@@ -140,7 +142,7 @@ class Masking:
         
         # Use watershed algorithm to refine boundaries
         distance = ndimage.distance_transform_edt(combined_mask)
-        local_maxi = filters.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=combined_mask)
+        local_maxi = feature.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=combined_mask)
         markers = measure.label(local_maxi)
         labels = segmentation.watershed(-distance, markers, mask=combined_mask)
         
@@ -151,6 +153,7 @@ class Masking:
         refined_mask = np.logical_or(refined_mask, edges > filters.threshold_otsu(edges))
         
         return refined_mask
+
 
     def final_refinement(self, mask):
         # Remove small holes
