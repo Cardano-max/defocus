@@ -1,9 +1,6 @@
 import numpy as np
 import cv2
 from PIL import Image
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
@@ -11,6 +8,12 @@ from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
+import scipy.io as sio
+import torch
+import torch.nn as nn
+
+# Assuming you've set up RefineNet and downloaded the model
+from refinenet import RefineNet  # You'll need to import the actual RefineNet class
 
 def timing(f):
     @wraps(f)
@@ -34,15 +37,14 @@ class Masking:
             "bag": 16, "scarf": 17, "neck": 18
         }
 
-        base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            num_hands=2,
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
+        # Load RefineNet model for hand segmentation
+        self.hand_model = RefineNet(num_classes=2, pretrained=False)
+        model_path = 'path/to/refinenet_res101_hof.mat'  # Update this path
+        weights = sio.loadmat(model_path)
+        self.hand_model.load_state_dict(weights['model'])
+        self.hand_model.eval()
+        if torch.cuda.is_available():
+            self.hand_model = self.hand_model.cuda()
 
     @timing
     def get_mask(self, img, category='upper_body'):
@@ -65,7 +67,7 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create hand mask
+        # Create hand mask using RefineNet
         hand_mask = self.create_precise_hand_mask(img_np)
         
         # Create arm mask (including exposed skin)
@@ -93,26 +95,21 @@ class Masking:
         return np.array(final_mask_pil)
 
     def create_precise_hand_mask(self, image):
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        # Preprocess the image for RefineNet
+        image_tensor = torch.from_numpy(image.transpose((2, 0, 1))).float().unsqueeze(0)
+        if torch.cuda.is_available():
+            image_tensor = image_tensor.cuda()
+
+        # Get hand segmentation from RefineNet
+        with torch.no_grad():
+            output = self.hand_model(image_tensor)
         
-        detection_result = self.hand_landmarker.detect(mp_image)
+        # Post-process the output
+        hand_mask = output.argmax(dim=1).squeeze().cpu().numpy()
         
-        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
-        
-        if detection_result.hand_landmarks:
-            for hand_landmarks in detection_result.hand_landmarks:
-                hand_points = []
-                for landmark in hand_landmarks:
-                    x = int(landmark.x * image.shape[1])
-                    y = int(landmark.y * image.shape[0])
-                    hand_points.append([x, y])
-                hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
-                
-            # Dilate the hand mask to ensure complete coverage
-            kernel = np.ones((7,7), np.uint8)
-            hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+        # Optional: Apply some post-processing to refine the hand mask
+        kernel = np.ones((5,5), np.uint8)
+        hand_mask = cv2.dilate(hand_mask.astype(np.uint8), kernel, iterations=1)
         
         return hand_mask > 0
 
