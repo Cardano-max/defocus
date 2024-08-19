@@ -66,11 +66,9 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
+        # Detect hands
         hand_mask = self.create_hand_mask(img_np)
         
-        # Remove hand regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_mask))
-
         # Refine the mask
         mask = self.refine_mask(mask)
         mask = self.smooth_edges(mask)
@@ -80,6 +78,9 @@ class Masking:
 
         # Additional refinement steps
         mask = self.post_process_mask(mask)
+
+        # Ensure hands are always unmasked
+        mask[hand_mask] = 0
 
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
@@ -102,7 +103,7 @@ class Masking:
                     y = int(landmark.y * image.shape[0])
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
+                cv2.fillConvexPoly(hand_mask, hand_points, 1)
                 
                 # Dilate the hand mask to ensure complete coverage
                 kernel = np.ones((7, 7), np.uint8)
