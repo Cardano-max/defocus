@@ -84,7 +84,7 @@ class Masking:
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
-        return np.array(mask_pil)
+        return mask_pil
 
     def enhance_garment_detection(self, image, initial_mask, parse_array):
         # Convert image to LAB color space
@@ -98,20 +98,29 @@ class Masking:
         # Extract the region of interest
         roi = lab_image[body_mask]
         
+        if roi.size == 0:
+            return initial_mask  # Return the initial mask if no body parts are detected
+
         # Perform k-means clustering
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
         k = 3  # number of clusters
-        _, labels, _ = cv2.kmeans(roi.reshape(-1, 3).astype(np.float32), k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        roi_reshaped = roi.reshape(-1, 3).astype(np.float32)
+        _, labels, _ = cv2.kmeans(roi_reshaped, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
         
         # Create a mask based on the dominant cluster
         dominant_label = np.argmax(np.bincount(labels.flatten()))
-        enhanced_mask = (labels.reshape(body_mask.shape) == dominant_label)
+        
+        # Create an empty mask of the same size as the original image
+        enhanced_mask = np.zeros_like(body_mask, dtype=bool)
+        
+        # Fill the body mask area with the clustering result
+        enhanced_mask[body_mask] = (labels.flatten() == dominant_label)
         
         # Combine with the initial mask
         final_mask = np.logical_or(initial_mask, enhanced_mask)
         
         return final_mask
-
+    
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
