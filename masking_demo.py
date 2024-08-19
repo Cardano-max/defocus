@@ -198,8 +198,9 @@ class Masking:
     def post_process_mask(self, mask):
         # Apply watershed algorithm for more precise segmentation
         distance = ndimage.distance_transform_edt(mask)
-        local_max = feature.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=mask)
-        markers = measure.label(local_max)
+        coords = feature.peak_local_max(distance, footprint=np.ones((3, 3)), labels=mask)
+        markers = np.zeros(distance.shape, dtype=int)
+        markers[tuple(coords.T)] = np.arange(1, len(coords) + 1)
         labels = segmentation.watershed(-distance, markers, mask=mask)
         
         # Smooth boundaries
