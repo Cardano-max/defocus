@@ -39,9 +39,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.99,
-            min_hand_presence_confidence=0.99,
-            min_tracking_confidence=0.99
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -67,9 +67,17 @@ class Masking:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
         hand_mask = self.create_hand_mask(img_np)
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Remove hand regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_mask))
+        # Combine hand and arm masks
+        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
+        
+        # Dilate the hand and arm mask to ensure complete coverage
+        kernel = np.ones((7, 7), np.uint8)
+        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=2)
+        
+        # Remove hand and arm regions from the garment mask
+        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
         # Refine the mask
         mask = self.refine_mask(mask)
@@ -80,6 +88,9 @@ class Masking:
 
         # Additional refinement steps
         mask = self.post_process_mask(mask)
+
+        # Reapply hand and arm mask to ensure they're not covered
+        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
