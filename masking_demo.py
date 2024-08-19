@@ -4,8 +4,8 @@ from PIL import Image
 import mediapipe as mp
 from functools import wraps
 from time import time
-from preprocess.humanparsing.run_parsing import Parsing
-from preprocess.openpose.run_openpose import OpenPose
+from Masking.preprocess.humanparsing.run_parsing import Parsing
+from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
