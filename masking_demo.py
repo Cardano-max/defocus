@@ -9,7 +9,7 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology, segmentation, feature
+from skimage import measure, morphology
 from scipy import ndimage
 
 def timing(f):
@@ -47,7 +47,7 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Image.Resampling.LANCZOS)
+        img_resized = img.resize((384, 512), Image.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
@@ -66,17 +66,14 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Detect hands
         hand_mask = self.create_hand_mask(img_np)
         
-        # Enhance garment-body differentiation
-        mask = self.enhance_garment_body_diff(mask, parse_array, pose_data, category)
-        
+        # Remove hand regions from the garment mask
+        mask = np.logical_and(mask, np.logical_not(hand_mask))
+
         # Refine the mask
         mask = self.refine_mask(mask)
-        
-        # Apply advanced smoothing
-        mask = self.advanced_smooth(mask)
+        mask = self.smooth_edges(mask)
 
         # Ensure the mask covers the full garment
         mask = self.fill_garment_gaps(mask, parse_array, category)
@@ -84,11 +81,8 @@ class Masking:
         # Additional refinement steps
         mask = self.post_process_mask(mask)
 
-        # Ensure hands are always unmasked
-        mask[hand_mask] = 0
-
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Image.Resampling.LANCZOS)
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
@@ -108,7 +102,7 @@ class Masking:
                     y = int(landmark.y * image.shape[0])
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillConvexPoly(hand_mask, hand_points, 1)
+                cv2.fillPoly(hand_mask, [hand_points], 1)
                 
                 # Dilate the hand mask to ensure complete coverage
                 kernel = np.ones((7, 7), np.uint8)
@@ -116,55 +110,29 @@ class Masking:
         
         return hand_mask > 0
 
-    def enhance_garment_body_diff(self, mask, parse_array, pose_data, category):
-        # Use pose estimation to refine garment boundaries
-        body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
-                      self.label_map["left_leg"], self.label_map["right_leg"],
-                      self.label_map["head"], self.label_map["neck"]]
-        body_mask = np.isin(parse_array, body_parts)
-        
-        # Create a distance map from body keypoints
-        distance_map = np.zeros_like(mask, dtype=float)
-        for point in pose_data:
-            if point[0] > 0 and point[1] > 0:
-                y, x = int(point[1]), int(point[0])
-                distance_map += ndimage.distance_transform_edt(np.ones_like(mask)) - ndimage.distance_transform_edt(np.zeros_like(mask))
-        
-        # Normalize distance map
-        distance_map = (distance_map - distance_map.min()) / (distance_map.max() - distance_map.min())
-        
-        # Combine mask, body mask, and distance map
-        refined_mask = np.logical_and(mask, np.logical_not(body_mask))
-        refined_mask = np.logical_or(refined_mask, distance_map < 0.1)  # Adjust threshold as needed
-        
-        return refined_mask
-
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        # Apply more aggressive morphological operations
-        kernel = np.ones((7,7), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=3)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=2)
+        # Apply morphological operations
+        kernel = np.ones((5,5), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
         
-        return mask_uint8 > 0
+        # Find contours and keep only the largest one
+        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            mask_refined = np.zeros_like(mask_uint8)
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, -1)
+        else:
+            mask_refined = mask_uint8
+        
+        return mask_refined > 0
 
-    def advanced_smooth(self, mask, sigma=2.0):
-        # Convert mask to uint8 for bilateralFilter
-        mask_uint8 = (mask * 255).astype(np.uint8)
-        
-        # Apply bilateral filter for edge-preserving smoothing
-        mask_smoothed = cv2.bilateralFilter(mask_uint8, 9, 75, 75)
-        
-        # Convert back to float for Gaussian smoothing
-        mask_float = mask_smoothed.astype(float) / 255.0
-        
-        # Apply additional Gaussian smoothing
-        mask_smoothed = ndimage.gaussian_filter(mask_float, sigma=sigma)
-        
-        # Threshold to get binary mask
-        mask_smooth = (mask_smoothed > 0.5).astype(np.uint8)
-        
+    def smooth_edges(self, mask, sigma=1.5):
+        mask_float = mask.astype(float)
+        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
+        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
         return mask_smooth
 
     def fill_garment_gaps(self, mask, parse_array, category):
@@ -181,13 +149,12 @@ class Masking:
         # Use the garment region to fill gaps in the mask
         filled_mask = np.logical_or(mask, garment_region)
         
-        # Remove small isolated regions and fill small holes
+        # Remove small isolated regions
         filled_mask = self.remove_small_regions(filled_mask)
-        filled_mask = ndimage.binary_fill_holes(filled_mask)
         
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=300):
+    def remove_small_regions(self, mask, min_size=200):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
             region = (labeled == i)
@@ -196,15 +163,14 @@ class Masking:
         return mask
 
     def post_process_mask(self, mask):
-        # Apply watershed algorithm for more precise segmentation
-        distance = ndimage.distance_transform_edt(mask)
-        coords = feature.peak_local_max(distance, footprint=np.ones((3, 3)), labels=mask)
-        markers = np.zeros(distance.shape, dtype=int)
-        markers[tuple(coords.T)] = np.arange(1, len(coords) + 1)
-        labels = segmentation.watershed(-distance, markers, mask=mask)
+        # Fill holes
+        mask = ndimage.binary_fill_holes(mask)
+        
+        # Remove small objects
+        mask = morphology.remove_small_objects(mask, min_size=500)
         
         # Smooth boundaries
-        mask = self.advanced_smooth(labels > 0, sigma=1.5)
+        mask = self.smooth_edges(mask, sigma=1.0)
         
         return mask
 
