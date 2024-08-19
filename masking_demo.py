@@ -1,9 +1,6 @@
 import numpy as np
 import cv2
 from PIL import Image
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
@@ -34,16 +31,6 @@ class Masking:
             "bag": 16, "scarf": 17, "neck": 18
         }
 
-        base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            num_hands=2,
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
-        self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
-
     @timing
     def get_mask(self, img, category='upper_body'):
         img_resized = img.resize((384, 512), Image.LANCZOS)
@@ -65,8 +52,8 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create hand mask
-        hand_mask = self.create_precise_hand_mask(img_np)
+        # Create hand mask using OpenPose data
+        hand_mask = self.create_hand_mask(pose_data, img_np.shape[:2])
         
         # Create arm mask (including exposed skin)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
@@ -92,27 +79,31 @@ class Masking:
         
         return np.array(final_mask_pil)
 
-    def create_precise_hand_mask(self, image):
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+    def create_hand_mask(self, pose_data, shape):
+        hand_mask = np.zeros(shape, dtype=np.uint8)
         
-        detection_result = self.hand_landmarker.detect(mp_image)
+        # OpenPose hand keypoints indices
+        left_hand_indices = [4, 3, 2, 1]  # Left wrist to left elbow
+        right_hand_indices = [7, 6, 5, 1]  # Right wrist to right elbow
         
-        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        def draw_hand(indices):
+            points = pose_data[indices]
+            valid_points = points[points[:, 0] != 0]
+            if len(valid_points) >= 2:
+                wrist = valid_points[0]
+                elbow = valid_points[-1]
+                hand_direction = wrist - elbow
+                hand_length = np.linalg.norm(hand_direction) * 0.3  # Adjust this factor to change hand size
+                hand_end = wrist + (hand_direction / np.linalg.norm(hand_direction)) * hand_length
+                cv2.line(hand_mask, tuple(wrist.astype(int)), tuple(hand_end.astype(int)), 1, 15)
+                cv2.circle(hand_mask, tuple(wrist.astype(int)), 20, 1, -1)
         
-        if detection_result.hand_landmarks:
-            for hand_landmarks in detection_result.hand_landmarks:
-                hand_points = []
-                for landmark in hand_landmarks:
-                    x = int(landmark.x * image.shape[1])
-                    y = int(landmark.y * image.shape[0])
-                    hand_points.append([x, y])
-                hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
-                
-            # Dilate the hand mask slightly to ensure complete coverage
-            kernel = np.ones((7,7), np.uint8)
-            hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+        draw_hand(left_hand_indices)
+        draw_hand(right_hand_indices)
+        
+        # Dilate the hand mask to ensure full coverage
+        kernel = np.ones((7, 7), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
 
