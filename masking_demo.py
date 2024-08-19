@@ -38,9 +38,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.7,
-            min_hand_presence_confidence=0.7,
-            min_tracking_confidence=0.7
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -84,7 +84,7 @@ class Masking:
         full_garment_mask = self.fill_garment_gaps(full_garment_mask, parse_array, category)
         full_garment_mask = self.expand_mask(full_garment_mask)
 
-        # Remove hand regions from the full garment mask
+        # Ensure hands are unmasked
         final_mask = np.logical_and(full_garment_mask, np.logical_not(hand_mask))
 
         final_mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
@@ -110,9 +110,9 @@ class Masking:
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
                 
-            # Dilate the hand mask slightly to ensure complete coverage
-            kernel = np.ones((5,5), np.uint8)
-            hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
+            # Dilate the hand mask to ensure complete coverage
+            kernel = np.ones((7,7), np.uint8)
+            hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
 
