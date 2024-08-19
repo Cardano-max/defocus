@@ -61,7 +61,7 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["pants"], self.label_map["skirt"]])
+                                        self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
@@ -81,10 +81,13 @@ class Masking:
         # Remove hand and arm regions from the garment mask
         mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        # Convert boolean mask to uint8
+        mask_uint8 = (mask * 255).astype(np.uint8)
+
+        mask_pil = Image.fromarray(mask_uint8)
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
-        return mask_pil
+        return np.array(mask_pil)
 
     def enhance_garment_detection(self, image, initial_mask, parse_array):
         # Convert image to LAB color space
@@ -207,7 +210,8 @@ def process_images(input_folder, output_folder, category):
         if input_img.mode != 'RGBA':
             input_img = input_img.convert('RGBA')
         
-        masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
+        mask_pil = Image.fromarray(mask)
+        masked_output = Image.composite(input_img, white_bg, mask_pil)
         
         masked_output.save(str(output_masked))
         
