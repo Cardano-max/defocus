@@ -142,8 +142,10 @@ class Masking:
         
         # Use watershed algorithm to refine boundaries
         distance = ndimage.distance_transform_edt(combined_mask)
-        local_maxi = feature.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=combined_mask)
-        markers = measure.label(local_maxi)
+        coords = feature.peak_local_max(distance, footprint=np.ones((3, 3)), labels=combined_mask)
+        mask = np.zeros(distance.shape, dtype=bool)
+        mask[tuple(coords.T)] = True
+        markers, _ = ndimage.label(mask)
         labels = segmentation.watershed(-distance, markers, mask=combined_mask)
         
         # Combine the results
