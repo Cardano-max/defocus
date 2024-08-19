@@ -9,7 +9,7 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology, filters, segmentation
+from skimage import measure, morphology, filters, segmentation, color
 from scipy import ndimage
 
 def timing(f):
@@ -74,11 +74,11 @@ class Masking:
         # Refine the garment mask
         mask = self.refine_garment_mask(mask, img_np)
         
-        # Remove hand and arm regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
-
         # Handle shadows and edge cases
         mask = self.handle_shadows_and_edges(mask, img_np)
+        
+        # Remove hand and arm regions from the garment mask
+        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
         # Final refinement
         mask = self.final_refinement(mask)
@@ -124,36 +124,44 @@ class Masking:
         return mask_refined
 
     def handle_shadows_and_edges(self, mask, image):
-        # Convert image to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Convert image to LAB color space
+        lab = color.rgb2lab(image)
+        l_channel = lab[:,:,0]
+        
+        # Apply adaptive thresholding to L channel
+        thresh = filters.threshold_local(l_channel, block_size=51, offset=10)
+        binary = l_channel > thresh
+        
+        # Combine with original mask
+        combined_mask = np.logical_or(mask, binary)
         
         # Apply edge detection
-        edges = cv2.Canny(gray, 50, 150)
-        
-        # Dilate edges to connect nearby edges
-        kernel = np.ones((3,3), np.uint8)
-        dilated_edges = cv2.dilate(edges, kernel, iterations=1)
+        edges = filters.sobel(l_channel)
         
         # Use watershed algorithm to refine boundaries
-        distance = ndimage.distance_transform_edt(mask)
-        local_maxi = filters.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=mask)
+        distance = ndimage.distance_transform_edt(combined_mask)
+        local_maxi = filters.peak_local_max(distance, indices=False, footprint=np.ones((3, 3)), labels=combined_mask)
         markers = measure.label(local_maxi)
-        labels = segmentation.watershed(-distance, markers, mask=mask)
+        labels = segmentation.watershed(-distance, markers, mask=combined_mask)
         
         # Combine the results
         refined_mask = (labels > 0).astype(np.uint8)
         
         # Use the edges to further refine the mask
-        refined_mask = np.logical_or(refined_mask, dilated_edges > 0)
+        refined_mask = np.logical_or(refined_mask, edges > filters.threshold_otsu(edges))
         
         return refined_mask
 
     def final_refinement(self, mask):
         # Remove small holes
-        mask = morphology.remove_small_holes(mask, area_threshold=64)
+        mask = morphology.remove_small_holes(mask, area_threshold=100)
         
         # Remove small objects
-        mask = morphology.remove_small_objects(mask, min_size=64)
+        mask = morphology.remove_small_objects(mask, min_size=100)
+        
+        # Apply morphological closing to smooth edges
+        kernel = morphology.disk(2)
+        mask = morphology.binary_closing(mask, kernel)
         
         # Smooth edges
         mask = filters.gaussian(mask, sigma=0.5)
