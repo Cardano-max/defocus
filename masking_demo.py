@@ -9,7 +9,7 @@ from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
-from skimage import measure, morphology
+from skimage import measure, morphology, segmentation
 from scipy import ndimage
 
 def timing(f):
@@ -34,14 +34,13 @@ class Masking:
             "bag": 16, "scarf": 17, "neck": 18
         }
 
-        # Initialize HandLandmarker
         base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.5,
-            min_hand_presence_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_hand_detection_confidence=0.3,
+            min_hand_presence_confidence=0.3,
+            min_tracking_confidence=0.3
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -66,38 +65,32 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        hand_mask = self.create_hand_mask(img_np)
+        hand_mask = self.create_precise_hand_mask(img_np)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Combine hand and arm masks
         hand_arm_mask = np.logical_or(hand_mask, arm_mask)
         
-        # Dilate the hand and arm mask to ensure complete coverage
-        kernel = np.ones((7, 7), np.uint8)
-        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=2)
-        
+        # Use active contours to refine the garment mask
+        mask = self.refine_mask_with_active_contours(mask, img_np)
+
         # Remove hand and arm regions from the garment mask
         mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
-        # Refine the mask
-        mask = self.refine_mask(mask)
-        mask = self.smooth_edges(mask)
+        # Use watershed algorithm for precise segmentation
+        mask = self.watershed_segmentation(img_np, mask)
 
         # Ensure the mask covers the full garment
         mask = self.fill_garment_gaps(mask, parse_array, category)
 
-        # Additional refinement steps
-        mask = self.post_process_mask(mask)
-
-        # Reapply hand and arm mask to ensure they're not covered
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+        # Final refinement
+        mask = self.final_refinement(mask, img_np)
 
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
-    def create_hand_mask(self, image):
+    def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
         
@@ -113,38 +106,40 @@ class Masking:
                     y = int(landmark.y * image.shape[0])
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
                 
-                # Dilate the hand mask to ensure complete coverage
-                kernel = np.ones((7, 7), np.uint8)
-                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+                # Create a more precise hand mask using convex hull
+                hull = cv2.convexHull(hand_points)
+                cv2.fillConvexPoly(hand_mask, hull, 1)
         
         return hand_mask > 0
 
-    def refine_mask(self, mask):
-        mask_uint8 = mask.astype(np.uint8) * 255
-        
-        # Apply morphological operations
-        kernel = np.ones((5,5), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
-        
-        # Find contours and keep only the largest one
-        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            mask_refined = np.zeros_like(mask_uint8)
-            cv2.drawContours(mask_refined, [largest_contour], 0, 255, -1)
-        else:
-            mask_refined = mask_uint8
-        
-        return mask_refined > 0
+    def refine_mask_with_active_contours(self, mask, image):
+        edges = cv2.Canny(image, 100, 200)
+        snake = segmentation.active_contour(edges, self.get_initial_snake(mask))
+        refined_mask = np.zeros_like(mask, dtype=np.uint8)
+        cv2.fillPoly(refined_mask, [np.int32(snake)], 1)
+        return refined_mask
 
-    def smooth_edges(self, mask, sigma=1.5):
-        mask_float = mask.astype(float)
-        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
-        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
-        return mask_smooth
+    def get_initial_snake(self, mask):
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            return contours[0].squeeze().astype(np.float64)
+        else:
+            return np.array([[0, 0], [0, mask.shape[0]], [mask.shape[1], mask.shape[0]], [mask.shape[1], 0]])
+
+    def watershed_segmentation(self, image, mask):
+        sure_bg = cv2.dilate(mask.astype(np.uint8), None, iterations=3)
+        dist_transform = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist_transform, 0.7*dist_transform.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+        unknown = cv2.subtract(sure_bg, sure_fg)
+        
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown==255] = 0
+        
+        markers = cv2.watershed(image, markers)
+        return markers > 1
 
     def fill_garment_gaps(self, mask, parse_array, category):
         if category == 'upper_body':
@@ -156,45 +151,24 @@ class Masking:
                               self.label_map["pants"], self.label_map["skirt"]]
         
         garment_region = np.isin(parse_array, garment_labels)
-        
-        # Use the garment region to fill gaps in the mask
         filled_mask = np.logical_or(mask, garment_region)
-        
-        # Remove small isolated regions
-        filled_mask = self.remove_small_regions(filled_mask)
-        
+        filled_mask = morphology.remove_small_holes(filled_mask, area_threshold=64)
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=200):
-        labeled, num_features = measure.label(mask, return_num=True)
-        for i in range(1, num_features + 1):
-            region = (labeled == i)
-            if np.sum(region) < min_size:
-                mask[region] = 0
-        return mask
-
-    def post_process_mask(self, mask):
-        # Fill holes
-        mask = ndimage.binary_fill_holes(mask)
+    def final_refinement(self, mask, image):
+        # Use grabcut for final refinement
+        mask_int = mask.astype('uint8') * 255
+        bgdModel = np.zeros((1,65),np.float64)
+        fgdModel = np.zeros((1,65),np.float64)
+        rect = (1,1,mask.shape[1]-1,mask.shape[0]-1)
+        cv2.grabCut(image, mask_int, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+        mask_refined = np.where((mask_int==2)|(mask_int==0),0,1).astype('uint8')
         
-        # Remove small objects
-        mask = morphology.remove_small_objects(mask, min_size=500)
+        # Final edge smoothing
+        mask_refined = cv2.GaussianBlur(mask_refined, (5, 5), 0)
+        _, mask_refined = cv2.threshold(mask_refined, 0.5, 1, cv2.THRESH_BINARY)
         
-        # Smooth boundaries
-        mask = self.smooth_edges(mask, sigma=1.0)
-        
-        return mask
-
-    @staticmethod
-    def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
-        img_copy = img.copy()
-        mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
-
-        cv2.floodFill(img, mask, (0, 0), 255)
-        img_inverse = cv2.bitwise_not(img)
-        dst = cv2.bitwise_or(img_copy, img_inverse)
-        return dst
+        return mask_refined
 
 def process_images(input_folder, output_folder, category):
     masker = Masking()
