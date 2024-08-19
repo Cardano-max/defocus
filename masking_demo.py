@@ -6,8 +6,8 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
-from Masking.preprocess.humanparsing.run_parsing import Parsing
-from Masking.preprocess.openpose.run_openpose import OpenPose
+from preprocess.humanparsing.run_parsing import Parsing
+from preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
@@ -18,8 +18,7 @@ def timing(f):
         ts = time()
         result = f(*args, **kw)
         te = time()
-        print('func:%r args:[%r, %r] took: %2.4f sec' % \
-          (f.__name__, args, kw, te-ts))
+        print(f'func:{f.__name__} args:[{args}, {kw}] took: {te-ts:.4f} sec')
         return result
     return wrap
 
@@ -68,26 +67,22 @@ class Masking:
         hand_mask = self.create_precise_hand_mask(img_np)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Combine hand and arm masks without dilation
+        # Combine hand and arm masks
         hand_arm_mask = np.logical_or(hand_mask, arm_mask)
         
-        # Remove hand and arm regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+        # Enhance the garment mask
+        enhanced_mask = self.enhance_garment_mask(mask, parse_array, category)
+        
+        # Remove hand and arm regions from the enhanced garment mask
+        final_mask = np.logical_and(enhanced_mask, np.logical_not(hand_arm_mask))
 
-        # Refine the mask
-        mask = self.refine_mask(mask)
-        mask = self.smooth_edges(mask, sigma=0.5)
+        # Apply final refinements
+        final_mask = self.apply_final_refinements(final_mask)
 
-        # Ensure the mask covers the full garment
-        mask = self.fill_garment_gaps(mask, parse_array, category)
-
-        # Reapply hand and arm mask to ensure they're not covered
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
-
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
-        return np.array(mask_pil)
+        return mask_pil
 
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -107,34 +102,14 @@ class Masking:
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
         
+        # Dilate the hand mask slightly to ensure full coverage
+        kernel = np.ones((5,5), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
+        
         return hand_mask > 0
 
-    def refine_mask(self, mask):
-        mask_uint8 = mask.astype(np.uint8) * 255
-        
-        # Apply minimal morphological operations
-        kernel = np.ones((3,3), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=1)
-        
-        # Find contours and keep only the largest one
-        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            mask_refined = np.zeros_like(mask_uint8)
-            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 1)  # Thin outline
-            mask_refined = cv2.fillPoly(mask_refined, [largest_contour], 255)
-        else:
-            mask_refined = mask_uint8
-        
-        return mask_refined > 0
-
-    def smooth_edges(self, mask, sigma=0.5):
-        mask_float = mask.astype(float)
-        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
-        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
-        return mask_smooth
-
-    def fill_garment_gaps(self, mask, parse_array, category):
+    def enhance_garment_mask(self, initial_mask, parse_array, category):
+        # Create a more inclusive garment region
         if category == 'upper_body':
             garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"]]
         elif category == 'lower_body':
@@ -145,13 +120,42 @@ class Masking:
         
         garment_region = np.isin(parse_array, garment_labels)
         
-        # Use the garment region to fill gaps in the mask
-        filled_mask = np.logical_or(mask, garment_region)
+        # Combine initial mask with the parsing result
+        enhanced_mask = np.logical_or(initial_mask, garment_region)
+        
+        # Fill holes in the mask
+        enhanced_mask = ndimage.binary_fill_holes(enhanced_mask)
         
         # Remove small isolated regions
-        filled_mask = self.remove_small_regions(filled_mask)
+        enhanced_mask = self.remove_small_regions(enhanced_mask)
         
-        return filled_mask
+        # Dilate the mask slightly to extend beyond garment boundaries
+        kernel = np.ones((5,5), np.uint8)
+        enhanced_mask = cv2.dilate(enhanced_mask.astype(np.uint8), kernel, iterations=1)
+        
+        return enhanced_mask
+
+    def apply_final_refinements(self, mask):
+        # Smooth the edges
+        mask = self.smooth_edges(mask, sigma=1.0)
+        
+        # Ensure the mask is binary
+        mask = mask > 0.5
+        
+        # Fill any remaining small holes
+        mask = ndimage.binary_fill_holes(mask)
+        
+        # Final dilation to ensure complete coverage
+        kernel = np.ones((3,3), np.uint8)
+        mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+        
+        return mask
+
+    def smooth_edges(self, mask, sigma=1.0):
+        mask_float = mask.astype(float)
+        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
+        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
+        return mask_smooth
 
     def remove_small_regions(self, mask, min_size=100):
         labeled, num_features = measure.label(mask, return_num=True)
@@ -170,33 +174,29 @@ def process_images(input_folder, output_folder, category):
     image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
     
     for i, image_file in enumerate(image_files, 1):
-        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
-        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
+        output_mask = Path(output_folder) / f"output_mask_{i}.png"
+        output_masked = Path(output_folder) / f"output_masked_image_{i}.png"
         
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
         
-        input_img = Image.open(image_file)
+        input_img = Image.open(image_file).convert('RGB')
         
         mask = masker.get_mask(input_img, category=category)
         
-        Image.fromarray(mask).save(str(output_mask))
+        # Save the mask
+        mask.save(str(output_mask))
         
-        white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
-        
-        if input_img.mode != 'RGBA':
-            input_img = input_img.convert('RGBA')
-        
-        masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
-        
+        # Apply the mask to the original image
+        masked_output = Image.composite(input_img, Image.new('RGB', input_img.size, (255, 255, 255)), mask)
         masked_output.save(str(output_masked))
         
         print(f"Mask saved to {output_mask}")
-        print(f"Masked output with white background saved to {output_masked}")
+        print(f"Masked output saved to {output_masked}")
         print()
 
 if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
-    category = "dresses"  # Change to "upper_body", "lower_body", or "dresses" as needed
+    category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
