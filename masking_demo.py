@@ -52,14 +52,14 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create hand mask using OpenPose data
-        hand_mask = self.create_hand_mask(pose_data, img_np.shape[:2])
+        # Create precise hand mask using OpenPose data
+        hand_mask = self.create_precise_hand_mask(pose_data, img_np.shape[:2])
         
         # Create arm mask (including exposed skin)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Create neck mask
-        neck_mask = parse_array == self.label_map["neck"]
+        # Create minimal neck mask
+        neck_mask = self.create_minimal_neck_mask(parse_array)
         
         # Combine garment, arm, and neck masks
         full_garment_mask = np.logical_or(mask, arm_mask)
@@ -67,9 +67,9 @@ class Masking:
         
         # Refine the full garment mask
         full_garment_mask = self.refine_mask(full_garment_mask)
-        full_garment_mask = self.smooth_edges(full_garment_mask, sigma=1.0)
+        full_garment_mask = self.smooth_edges(full_garment_mask, sigma=0.5)
         full_garment_mask = self.fill_garment_gaps(full_garment_mask, parse_array, category)
-        full_garment_mask = self.expand_mask(full_garment_mask)
+        full_garment_mask = self.expand_mask(full_garment_mask, expansion=2)
 
         # Unmask hand regions from the full garment mask
         final_mask = np.logical_and(full_garment_mask, np.logical_not(hand_mask))
@@ -79,7 +79,7 @@ class Masking:
         
         return np.array(final_mask_pil)
 
-    def create_hand_mask(self, pose_data, shape):
+    def create_precise_hand_mask(self, pose_data, shape):
         hand_mask = np.zeros(shape, dtype=np.uint8)
         
         # OpenPose hand keypoints indices
@@ -93,26 +93,35 @@ class Masking:
                 wrist = valid_points[0]
                 elbow = valid_points[-1]
                 hand_direction = wrist - elbow
-                hand_length = np.linalg.norm(hand_direction) * 0.3  # Adjust this factor to change hand size
+                hand_length = np.linalg.norm(hand_direction) * 0.2  # Reduced hand size
                 hand_end = wrist + (hand_direction / np.linalg.norm(hand_direction)) * hand_length
-                cv2.line(hand_mask, tuple(wrist.astype(int)), tuple(hand_end.astype(int)), 1, 15)
-                cv2.circle(hand_mask, tuple(wrist.astype(int)), 20, 1, -1)
+                cv2.line(hand_mask, tuple(wrist.astype(int)), tuple(hand_end.astype(int)), 1, 10)
+                cv2.circle(hand_mask, tuple(wrist.astype(int)), 15, 1, -1)
         
         draw_hand(left_hand_indices)
         draw_hand(right_hand_indices)
         
-        # Dilate the hand mask to ensure full coverage
-        kernel = np.ones((7, 7), np.uint8)
-        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+        # Apply minimal dilation to ensure connectivity
+        kernel = np.ones((3, 3), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
         
         return hand_mask > 0
+
+    def create_minimal_neck_mask(self, parse_array):
+        neck_mask = parse_array == self.label_map["neck"]
+        
+        # Erode the neck mask to make it minimal
+        kernel = np.ones((5, 5), np.uint8)
+        neck_mask = cv2.erode(neck_mask.astype(np.uint8), kernel, iterations=2)
+        
+        return neck_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
         
-        # Apply morphological operations
-        kernel = np.ones((5,5), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        # Apply minimal morphological operations
+        kernel = np.ones((3, 3), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=1)
         mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
         
         # Find contours and keep only the largest one
@@ -120,14 +129,14 @@ class Masking:
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
             mask_refined = np.zeros_like(mask_uint8)
-            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 3)  # Thicker outline
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 2)  # Thinner outline
             mask_refined = cv2.fillPoly(mask_refined, [largest_contour], 255)
         else:
             mask_refined = mask_uint8
         
         return mask_refined > 0
 
-    def smooth_edges(self, mask, sigma=1.0):
+    def smooth_edges(self, mask, sigma=0.5):
         mask_float = mask.astype(float)
         mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
@@ -136,13 +145,13 @@ class Masking:
     def fill_garment_gaps(self, mask, parse_array, category):
         if category == 'upper_body':
             garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
-                              self.label_map["left_arm"], self.label_map["right_arm"], self.label_map["neck"]]
+                              self.label_map["left_arm"], self.label_map["right_arm"]]
         elif category == 'lower_body':
             garment_labels = [self.label_map["pants"], self.label_map["skirt"]]
         else:  # dresses
             garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
                               self.label_map["pants"], self.label_map["skirt"],
-                              self.label_map["left_arm"], self.label_map["right_arm"], self.label_map["neck"]]
+                              self.label_map["left_arm"], self.label_map["right_arm"]]
         
         garment_region = np.isin(parse_array, garment_labels)
         
@@ -154,7 +163,7 @@ class Masking:
         
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=100):
+    def remove_small_regions(self, mask, min_size=50):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
             region = (labeled == i)
@@ -162,7 +171,7 @@ class Masking:
                 mask[region] = 0
         return mask
 
-    def expand_mask(self, mask, expansion=3):
+    def expand_mask(self, mask, expansion=2):
         kernel = np.ones((expansion, expansion), np.uint8)
         expanded_mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
         return expanded_mask > 0
