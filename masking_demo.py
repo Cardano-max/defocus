@@ -4,12 +4,11 @@ from PIL import Image
 import mediapipe as mp
 from functools import wraps
 from time import time
-from Masking.preprocess.humanparsing.run_parsing import Parsing
-from Masking.preprocess.openpose.run_openpose import OpenPose
+from preprocess.humanparsing.run_parsing import Parsing
+from preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
-from PIL.Image import Resampling
 
 def timing(f):
     @wraps(f)
@@ -39,7 +38,7 @@ class Masking:
 
     @timing
     def get_mask(self, img, category='upper_body'):
-        img_resized = img.resize((384, 512), Resampling.LANCZOS)
+        img_resized = img.resize((384, 512), Image.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
@@ -54,7 +53,7 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                        self.label_map["pants"], self.label_map["skirt"]])
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
@@ -78,15 +77,18 @@ class Masking:
         # Additional refinement steps
         mask = self.post_process_mask(mask)
 
+        # Handle overlapping hands
+        mask = self.handle_overlapping_hands(mask, hand_mask, parse_array, category)
+
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
     def create_body_mask(self, image, parse_array):
         body_parts = [self.label_map["left_arm"], self.label_map["right_arm"],
-                    self.label_map["left_leg"], self.label_map["right_leg"],
-                    self.label_map["head"], self.label_map["neck"]]
+                      self.label_map["left_leg"], self.label_map["right_leg"],
+                      self.label_map["head"], self.label_map["neck"]]
         body_mask = np.isin(parse_array, body_parts).astype(np.uint8) * 255
         
         # Use MediaPipe Pose to refine body mask
@@ -96,11 +98,11 @@ class Masking:
             h, w = image.shape[:2]
             for landmark in results.pose_landmarks.landmark:
                 x, y = int(landmark.x * w), int(landmark.y * h)
-                cv2.circle(body_mask, (x, y), 15, 255, -1)
+                cv2.circle(body_mask, (x, y), 10, 255, -1)
         
         # Dilate the body mask to ensure complete coverage
-        kernel = np.ones((7, 7), np.uint8)
-        body_mask = cv2.dilate(body_mask, kernel, iterations=2)
+        kernel = np.ones((5, 5), np.uint8)
+        body_mask = cv2.dilate(body_mask, kernel, iterations=1)
         
         return body_mask > 0
 
@@ -120,8 +122,8 @@ class Masking:
                 cv2.fillPoly(hand_mask, [hand_points], 1)
                 
                 # Dilate the hand mask to ensure complete coverage
-                kernel = np.ones((7, 7), np.uint8)
-                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+                kernel = np.ones((5, 5), np.uint8)
+                hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
         
         return hand_mask > 0
 
@@ -129,9 +131,9 @@ class Masking:
         mask_uint8 = mask.astype(np.uint8) * 255
         
         # Apply morphological operations
-        kernel = np.ones((5,5), np.uint8)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
-        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=2)
+        kernel = np.ones((3, 3), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=1)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
         
         # Find contours and keep only the largest one
         contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -144,7 +146,7 @@ class Masking:
         
         return mask_refined > 0
 
-    def smooth_edges(self, mask, sigma=2.0):
+    def smooth_edges(self, mask, sigma=1.0):
         mask_float = mask.astype(float)
         mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
@@ -169,7 +171,7 @@ class Masking:
         
         return filled_mask
 
-    def remove_small_regions(self, mask, min_size=200):
+    def remove_small_regions(self, mask, min_size=100):
         labeled, num_features = measure.label(mask, return_num=True)
         for i in range(1, num_features + 1):
             region = (labeled == i)
@@ -182,16 +184,36 @@ class Masking:
         mask = ndimage.binary_fill_holes(mask)
         
         # Remove small objects
-        mask = morphology.remove_small_objects(mask, min_size=500)
+        mask = morphology.remove_small_objects(mask, min_size=300)
         
         # Smooth boundaries
-        mask = self.smooth_edges(mask, sigma=1.5)
+        mask = self.smooth_edges(mask, sigma=0.5)
+        
+        return mask
+
+    def handle_overlapping_hands(self, mask, hand_mask, parse_array, category):
+        # Identify garment regions
+        if category == 'upper_body':
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"]]
+        elif category == 'lower_body':
+            garment_labels = [self.label_map["pants"], self.label_map["skirt"]]
+        else:  # dresses
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
+                              self.label_map["pants"], self.label_map["skirt"]]
+        
+        garment_region = np.isin(parse_array, garment_labels)
+        
+        # Find overlapping regions
+        overlap = np.logical_and(garment_region, hand_mask)
+        
+        # Remove overlapping regions from the mask
+        mask[overlap] = 0
         
         return mask
 
     @staticmethod
     def hole_fill(img):
-        img = np.pad(img[1:-1, 1:-1], pad_width = 1, mode = 'constant', constant_values=0)
+        img = np.pad(img[1:-1, 1:-1], pad_width=1, mode='constant', constant_values=0)
         img_copy = img.copy()
         mask = np.zeros((img.shape[0] + 2, img.shape[1] + 2), dtype=np.uint8)
 
@@ -203,10 +225,8 @@ class Masking:
 def process_images(input_folder, output_folder, category):
     masker = Masking()
     
-    # Create output folder if it doesn't exist
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     
-    # Get all image files from the input folder
     image_files = list(Path(input_folder).glob('*'))
     image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
     
@@ -222,14 +242,11 @@ def process_images(input_folder, output_folder, category):
         
         Image.fromarray(mask).save(str(output_mask))
         
-        # Create a white background image
         white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
         
-        # Convert input image to RGBA if it's not already
         if input_img.mode != 'RGBA':
             input_img = input_img.convert('RGBA')
         
-        # Create a new image with white background and paste the masked input image
         masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
         
         masked_output.save(str(output_masked))
@@ -239,8 +256,8 @@ def process_images(input_folder, output_folder, category):
         print()
 
 if __name__ == "__main__":
-    input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
-    output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
-    category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
+    input_folder = Path("/path/to/your/input/folder")
+    output_folder = Path("/path/to/your/output/folder")
+    category = "dresses"  # Change to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
