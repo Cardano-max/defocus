@@ -28,7 +28,7 @@ class Masking:
         self.openpose_model = OpenPose(-1)
         self.mp_hands = mp.solutions.hands
         self.mp_pose = mp.solutions.pose
-        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.hands = self.mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.7)
         self.pose = self.mp_pose.Pose(static_image_mode=True, model_complexity=2, min_detection_confidence=0.7)
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
@@ -78,10 +78,6 @@ class Masking:
         # Additional refinement steps
         mask = self.post_process_mask(mask)
 
-        # Apply skin color detection as a final step
-        skin_mask = self.detect_skin(img_np)
-        mask = np.logical_and(mask, np.logical_not(skin_mask))
-
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Resampling.LANCZOS)
         
@@ -125,27 +121,9 @@ class Masking:
                 
                 # Dilate the hand mask to ensure complete coverage
                 kernel = np.ones((7, 7), np.uint8)
-                hand_mask = cv2.dilate(hand_mask, kernel, iterations=3)
+                hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
-
-    def detect_skin(self, image):
-        # Convert the image from BGR to YCrCb
-        ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
-
-        # Define the range for skin color in YCrCb
-        lower = np.array([0, 133, 77], dtype=np.uint8)
-        upper = np.array([255, 173, 127], dtype=np.uint8)
-
-        # Create a binary mask for the skin color
-        skin_mask = cv2.inRange(ycrcb, lower, upper)
-
-        # Apply morphological operations to refine the mask
-        kernel = np.ones((5, 5), np.uint8)
-        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
-        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
-
-        return skin_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
