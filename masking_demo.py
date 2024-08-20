@@ -92,7 +92,7 @@ class Masking:
         
         return np.array(mask_pil)
 
-    def create_arm_mask(self, pose_data, image_size):
+    def create_precise_hand_mask(self, pose_data, image_size):
         arm_mask = np.zeros(image_size[::-1], dtype=np.uint8)
         
         # Define the keypoint indices for shoulders, elbows, and wrists
