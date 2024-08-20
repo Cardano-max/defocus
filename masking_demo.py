@@ -55,43 +55,44 @@ class Masking:
         keypoints = self.openpose_model(img_resized)
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
+        # Create garment mask
         if category == 'upper_body':
-            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
+            garment_mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
         elif category == 'lower_body':
-            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+            garment_mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
-            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["pants"], self.label_map["skirt"]])
+            garment_mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                                 self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        hand_mask = self.create_precise_hand_mask(img_np)
+        # Create arm mask
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
-        
-        # Combine hand and arm masks
-        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
-        
-        # Dilate the hand and arm mask slightly
-        kernel = np.ones((3,3), np.uint8)
-        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=1)
-        
-        # Remove hand and arm regions from the garment mask
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+
+        # Combine garment and arm masks
+        combined_mask = np.logical_or(garment_mask, arm_mask)
+
+        # Create hand mask
+        hand_mask = self.create_precise_hand_mask(img_np)
+
+        # Remove hands from the combined mask
+        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
 
         # Refine the mask
-        mask = self.refine_mask(mask)
-        mask = self.smooth_edges(mask, sigma=1.0)
+        combined_mask = self.refine_mask(combined_mask)
+        combined_mask = self.smooth_edges(combined_mask, sigma=1.0)
 
-        # Ensure the mask covers the full garment
-        mask = self.fill_garment_gaps(mask, parse_array, category)
+        # Ensure the mask covers the full garment and arms
+        combined_mask = self.fill_garment_gaps(combined_mask, parse_array, category)
 
         # Expand the mask slightly
-        mask = self.expand_mask(mask)
+        combined_mask = self.expand_mask(combined_mask)
 
-        # Reapply hand and arm mask to ensure they're not covered
-        mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+        # Reapply hand mask to ensure hands are not covered
+        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
 
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        # Convert mask to PIL Image and resize to original size
+        mask_pil = Image.fromarray((combined_mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -113,6 +114,10 @@ class Masking:
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
+        
+        # Dilate the hand mask slightly to ensure full coverage
+        kernel = np.ones((5,5), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
 
@@ -143,12 +148,14 @@ class Masking:
 
     def fill_garment_gaps(self, mask, parse_array, category):
         if category == 'upper_body':
-            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"]]
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
+                              self.label_map["left_arm"], self.label_map["right_arm"]]
         elif category == 'lower_body':
             garment_labels = [self.label_map["pants"], self.label_map["skirt"]]
         else:  # dresses
             garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
-                              self.label_map["pants"], self.label_map["skirt"]]
+                              self.label_map["pants"], self.label_map["skirt"],
+                              self.label_map["left_arm"], self.label_map["right_arm"]]
         
         garment_region = np.isin(parse_array, garment_labels)
         
