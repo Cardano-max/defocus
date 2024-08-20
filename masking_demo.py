@@ -121,14 +121,17 @@ class Masking:
         left_wrist_idx, right_wrist_idx = 7, 4
         
         # Check if the required keypoints are detected
-        if pose_data[left_shoulder_idx].all() and pose_data[left_elbow_idx].all() and pose_data[left_wrist_idx].all() and \
-           pose_data[right_shoulder_idx].all() and pose_data[right_elbow_idx].all() and pose_data[right_wrist_idx].all():
+        if len(pose_data) > 0 and pose_data[left_shoulder_idx].all() and pose_data[left_elbow_idx].all() and pose_data[left_wrist_idx].all() and \
+        pose_data[right_shoulder_idx].all() and pose_data[right_elbow_idx].all() and pose_data[right_wrist_idx].all():
             
-            # Draw arm masks using the keypoints
-            cv2.line(arm_mask, tuple(pose_data[left_shoulder_idx]), tuple(pose_data[left_elbow_idx]), 255, 10)
-            cv2.line(arm_mask, tuple(pose_data[left_elbow_idx]), tuple(pose_data[left_wrist_idx]), 255, 10)
-            cv2.line(arm_mask, tuple(pose_data[right_shoulder_idx]), tuple(pose_data[right_elbow_idx]), 255, 10)
-            cv2.line(arm_mask, tuple(pose_data[right_elbow_idx]), tuple(pose_data[right_wrist_idx]), 255, 10)
+            # Scale the keypoints to the image size
+            pose_data_scaled = (pose_data * np.array(image_size[::-1])).astype(int)
+            
+            # Draw arm masks using the scaled keypoints
+            cv2.line(arm_mask, tuple(pose_data_scaled[left_shoulder_idx]), tuple(pose_data_scaled[left_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data_scaled[left_elbow_idx]), tuple(pose_data_scaled[left_wrist_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data_scaled[right_shoulder_idx]), tuple(pose_data_scaled[right_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data_scaled[right_elbow_idx]), tuple(pose_data_scaled[right_wrist_idx]), 255, 10)
         
         return arm_mask > 0
 
