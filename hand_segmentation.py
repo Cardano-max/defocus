@@ -4,7 +4,6 @@ import numpy as np
 import cv2
 from PIL import Image
 import tensorflow as tf
-from tensorflow.keras.models import load_model
 
 def unet(input_size=(256, 256, 3)):
     inputs = tf.keras.layers.Input(input_size)
@@ -51,9 +50,10 @@ def unet(input_size=(256, 256, 3)):
     return model
 
 class HandSegmenter:
-    def __init__(self, model_path):
-        self.model = load_model(model_path)
-        self.image_shape = (256, 256)  # The shape used during training
+    def __init__(self):
+        self.model = unet(input_size=(256, 256, 3))
+        self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        self.image_shape = (256, 256)
 
     def preprocess_image(self, image):
         image = image.resize(self.image_shape)

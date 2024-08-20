@@ -1,5 +1,3 @@
-# utils_newmask.py
-
 import numpy as np
 import cv2
 from PIL import Image
@@ -9,10 +7,10 @@ from Masking.preprocess.openpose.run_openpose import OpenPose
 from hand_segmentation import HandSegmenter
 
 class Masking:
-    def __init__(self, hand_model_path):
+    def __init__(self):
         self.parsing_model = Parsing(-1)
         self.openpose_model = OpenPose(-1)
-        self.hand_segmenter = HandSegmenter(hand_model_path)
+        self.hand_segmenter = HandSegmenter()
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -51,8 +49,8 @@ class Masking:
         
         return np.array(mask_pil)
 
-def process_images(input_folder, output_folder, category, hand_model_path):
-    masker = Masking(hand_model_path)
+def process_images(input_folder, output_folder, category):
+    masker = Masking()
     
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     
@@ -82,6 +80,5 @@ if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
     category = "dresses" # Change to "upper_body", "lower_body", or "dresses" as needed
-    hand_model_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/model/best_model.h5"
     
-    process_images(str(input_folder), str(output_folder), category, hand_model_path)
+    process_images(str(input_folder), str(output_folder), category)
