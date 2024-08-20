@@ -38,9 +38,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.99,
-            min_hand_presence_confidence=0.99,
-            min_tracking_confidence=0.99
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -65,32 +65,36 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create arm mask
+        hand_mask = self.create_precise_hand_mask(img_np)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Combine garment and arm masks
-        combined_mask = np.logical_or(mask, arm_mask)
-
-        # Create precise hand mask
-        hand_mask = self.create_precise_hand_mask(img_np)
+        # Combine hand and arm masks
+        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
+        
+        # Dilate the hand and arm mask slightly
+        kernel = np.ones((3,3), np.uint8)
+        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=1)
         
         # Remove hand regions from the combined mask
-        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+        arm_mask_no_hands = np.logical_and(hand_arm_mask, np.logical_not(hand_mask))
+        
+        # Add arm mask (without hands) to the garment mask
+        mask = np.logical_or(mask, arm_mask_no_hands)
 
         # Refine the mask
-        combined_mask = self.refine_mask(combined_mask)
-        combined_mask = self.smooth_edges(combined_mask, sigma=1.0)
+        mask = self.refine_mask(mask)
+        mask = self.smooth_edges(mask, sigma=1.0)
 
-        # Ensure the mask covers the full garment and arms
-        combined_mask = self.fill_garment_gaps(combined_mask, parse_array, category)
+        # Ensure the mask covers the full garment
+        mask = self.fill_garment_gaps(mask, parse_array, category)
 
         # Expand the mask slightly
-        combined_mask = self.expand_mask(combined_mask)
+        mask = self.expand_mask(mask)
 
-        # Reapply hand mask to ensure hands are not covered
-        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+        # Reapply hand mask to ensure they're not covered
+        mask = np.logical_and(mask, np.logical_not(hand_mask))
 
-        mask_pil = Image.fromarray((combined_mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -112,10 +116,6 @@ class Masking:
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
                 cv2.fillPoly(hand_mask, [hand_points], 1)
-        
-        # Dilate the hand mask slightly to ensure full coverage
-        kernel = np.ones((5,5), np.uint8)
-        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
         
         return hand_mask > 0
 
@@ -154,10 +154,9 @@ class Masking:
                               self.label_map["pants"], self.label_map["skirt"]]
         
         garment_region = np.isin(parse_array, garment_labels)
-        arm_region = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Use the garment and arm regions to fill gaps in the mask
-        filled_mask = np.logical_or(mask, np.logical_or(garment_region, arm_region))
+        # Use the garment region to fill gaps in the mask
+        filled_mask = np.logical_or(mask, garment_region)
         
         # Remove small isolated regions
         filled_mask = self.remove_small_regions(filled_mask)
