@@ -19,6 +19,7 @@ class Masking:
         }
 
     def get_mask(self, img, category='upper_body'):
+        original_size = img.size
         img_resized = img.resize((384, 512), Image.LANCZOS)
         img_np = np.array(img_resized)
         
@@ -37,15 +38,18 @@ class Masking:
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Get hand mask using the pre-trained UNet model
+        # Get hand mask using the HandSegmenter
         hand_mask = self.hand_segmenter.get_hand_mask(img)
         
+        # Resize hand_mask to match the shape of the main mask
+        hand_mask_resized = cv2.resize(hand_mask, (384, 512), interpolation=cv2.INTER_NEAREST)
+        
         # Remove hands from the mask
-        mask = np.logical_and(mask, np.logical_not(hand_mask))
+        mask = np.logical_and(mask, np.logical_not(hand_mask_resized))
 
         # Convert mask to full image size
         mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
+        mask_pil = mask_pil.resize(original_size, Image.LANCZOS)
         
         return np.array(mask_pil)
 
