@@ -1,16 +1,32 @@
 import numpy as np
 import cv2
 from PIL import Image
-from pathlib import Path
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from functools import wraps
+from time import time
 from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
-from hand_segmentation import HandSegmenter
+from pathlib import Path
+from skimage import measure, morphology
+from scipy import ndimage
+
+def timing(f):
+    @wraps(f)
+    def wrap(*args, **kw):
+        ts = time()
+        result = f(*args, **kw)
+        te = time()
+        print('func:%r args:[%r, %r] took: %2.4f sec' % \
+          (f.__name__, args, kw, te-ts))
+        return result
+    return wrap
 
 class Masking:
     def __init__(self):
         self.parsing_model = Parsing(-1)
         self.openpose_model = OpenPose(-1)
-        self.hand_segmenter = HandSegmenter()
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -18,40 +34,148 @@ class Masking:
             "bag": 16, "scarf": 17, "neck": 18
         }
 
+        base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            num_hands=2,
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
+
+    @timing
     def get_mask(self, img, category='upper_body'):
-        original_size = img.size
         img_resized = img.resize((384, 512), Image.LANCZOS)
         img_np = np.array(img_resized)
         
         parse_result, _ = self.parsing_model(img_resized)
         parse_array = np.array(parse_result)
 
+        keypoints = self.openpose_model(img_resized)
+        pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
+
         if category == 'upper_body':
-            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["left_arm"], self.label_map["right_arm"]])
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
         elif category == 'lower_body':
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["pants"], self.label_map["skirt"],
-                                         self.label_map["left_arm"], self.label_map["right_arm"]])
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Get hand mask using the HandSegmenter
-        hand_mask = self.hand_segmenter.get_hand_mask(img)
+        # Create arm mask
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Resize hand_mask to match the shape of the main mask
-        hand_mask_resized = cv2.resize(hand_mask, (384, 512), interpolation=cv2.INTER_NEAREST)
-        
-        # Remove hands from the mask
-        mask = np.logical_and(mask, np.logical_not(hand_mask_resized))
+        # Combine garment and arm masks
+        combined_mask = np.logical_or(mask, arm_mask)
 
-        # Convert mask to full image size
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
-        mask_pil = mask_pil.resize(original_size, Image.LANCZOS)
+        # Create precise hand mask
+        hand_mask = self.create_precise_hand_mask(img_np)
+        
+        # Remove hand regions from the combined mask
+        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+
+        # Refine the mask
+        combined_mask = self.refine_mask(combined_mask)
+        combined_mask = self.smooth_edges(combined_mask, sigma=1.0)
+
+        # Ensure the mask covers the full garment and arms
+        combined_mask = self.fill_garment_gaps(combined_mask, parse_array, category)
+
+        # Expand the mask slightly
+        combined_mask = self.expand_mask(combined_mask)
+
+        # Reapply hand mask to ensure hands are not covered
+        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+
+        mask_pil = Image.fromarray((combined_mask * 255).astype(np.uint8))
+        mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
+
+    def create_precise_hand_mask(self, image):
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        
+        detection_result = self.hand_landmarker.detect(mp_image)
+        
+        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        
+        if detection_result.hand_landmarks:
+            for hand_landmarks in detection_result.hand_landmarks:
+                hand_points = []
+                for landmark in hand_landmarks:
+                    x = int(landmark.x * image.shape[1])
+                    y = int(landmark.y * image.shape[0])
+                    hand_points.append([x, y])
+                hand_points = np.array(hand_points, dtype=np.int32)
+                cv2.fillPoly(hand_mask, [hand_points], 1)
+        
+        # Dilate the hand mask slightly to ensure full coverage
+        kernel = np.ones((5,5), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+        
+        return hand_mask > 0
+
+    def refine_mask(self, mask):
+        mask_uint8 = mask.astype(np.uint8) * 255
+        
+        # Apply minimal morphological operations
+        kernel = np.ones((3,3), np.uint8)
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
+        # Find contours and keep only the largest one
+        contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            mask_refined = np.zeros_like(mask_uint8)
+            cv2.drawContours(mask_refined, [largest_contour], 0, 255, 2)  # Slightly thicker outline
+            mask_refined = cv2.fillPoly(mask_refined, [largest_contour], 255)
+        else:
+            mask_refined = mask_uint8
+        
+        return mask_refined > 0
+
+    def smooth_edges(self, mask, sigma=1.0):
+        mask_float = mask.astype(float)
+        mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
+        mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
+        return mask_smooth
+
+    def fill_garment_gaps(self, mask, parse_array, category):
+        if category == 'upper_body':
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"]]
+        elif category == 'lower_body':
+            garment_labels = [self.label_map["pants"], self.label_map["skirt"]]
+        else:  # dresses
+            garment_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
+                              self.label_map["pants"], self.label_map["skirt"]]
+        
+        garment_region = np.isin(parse_array, garment_labels)
+        arm_region = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        
+        # Use the garment and arm regions to fill gaps in the mask
+        filled_mask = np.logical_or(mask, np.logical_or(garment_region, arm_region))
+        
+        # Remove small isolated regions
+        filled_mask = self.remove_small_regions(filled_mask)
+        
+        return filled_mask
+
+    def remove_small_regions(self, mask, min_size=100):
+        labeled, num_features = measure.label(mask, return_num=True)
+        for i in range(1, num_features + 1):
+            region = (labeled == i)
+            if np.sum(region) < min_size:
+                mask[region] = 0
+        return mask
+
+    def expand_mask(self, mask, expansion=3):
+        kernel = np.ones((expansion, expansion), np.uint8)
+        expanded_mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+        return expanded_mask > 0
 
 def process_images(input_folder, output_folder, category):
     masker = Masking()
@@ -62,8 +186,8 @@ def process_images(input_folder, output_folder, category):
     image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
     
     for i, image_file in enumerate(image_files, 1):
-        output_mask = Path(output_folder) / f"output_mask_{i}.png"
-        output_masked = Path(output_folder) / f"output_masked_image_{i}.png"
+        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
+        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
         
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
         
@@ -73,16 +197,22 @@ def process_images(input_folder, output_folder, category):
         
         Image.fromarray(mask).save(str(output_mask))
         
-        masked_output = np.array(input_img) * (mask[:,:,None] / 255.0)
-        Image.fromarray(masked_output.astype(np.uint8)).save(str(output_masked))
+        white_bg = Image.new('RGB', input_img.size, (255, 255, 255))
+        
+        if input_img.mode != 'RGBA':
+            input_img = input_img.convert('RGBA')
+        
+        masked_output = Image.composite(input_img, white_bg, Image.fromarray(mask))
+        
+        masked_output.save(str(output_masked))
         
         print(f"Mask saved to {output_mask}")
-        print(f"Masked output saved to {output_masked}")
+        print(f"Masked output with white background saved to {output_masked}")
         print()
 
 if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
-    category = "dresses" # Change to "upper_body", "lower_body", or "dresses" as needed
+    category = "dresses"  # Change to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
