@@ -61,22 +61,15 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                         self.label_map["pants"], self.label_map["skirt"]])
+                                        self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
         hand_mask = self.create_precise_hand_mask(img_np)
-        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        arm_mask = self.create_arm_mask(pose_data, img_resized.size)
         
-        # Combine hand and arm masks
-        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
-        
-        # Dilate the hand and arm mask slightly
-        kernel = np.ones((3,3), np.uint8)
-        hand_arm_mask = cv2.dilate(hand_arm_mask.astype(np.uint8), kernel, iterations=1)
-        
-        # Remove hand regions from the combined mask
-        arm_mask_no_hands = np.logical_and(hand_arm_mask, np.logical_not(hand_mask))
+        # Remove hand regions from the arm mask
+        arm_mask_no_hands = np.logical_and(arm_mask, np.logical_not(hand_mask))
         
         # Add arm mask (without hands) to the garment mask
         mask = np.logical_or(mask, arm_mask_no_hands)
@@ -99,25 +92,25 @@ class Masking:
         
         return np.array(mask_pil)
 
-    def create_precise_hand_mask(self, image):
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+    def create_arm_mask(self, pose_data, image_size):
+        arm_mask = np.zeros(image_size[::-1], dtype=np.uint8)
         
-        detection_result = self.hand_landmarker.detect(mp_image)
+        # Define the keypoint indices for shoulders, elbows, and wrists
+        left_shoulder_idx, right_shoulder_idx = 5, 2
+        left_elbow_idx, right_elbow_idx = 6, 3
+        left_wrist_idx, right_wrist_idx = 7, 4
         
-        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        # Check if the required keypoints are detected
+        if pose_data[left_shoulder_idx].all() and pose_data[left_elbow_idx].all() and pose_data[left_wrist_idx].all() and \
+        pose_data[right_shoulder_idx].all() and pose_data[right_elbow_idx].all() and pose_data[right_wrist_idx].all():
+            
+            # Draw arm masks using the keypoints
+            cv2.line(arm_mask, tuple(pose_data[left_shoulder_idx]), tuple(pose_data[left_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[left_elbow_idx]), tuple(pose_data[left_wrist_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[right_shoulder_idx]), tuple(pose_data[right_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[right_elbow_idx]), tuple(pose_data[right_wrist_idx]), 255, 10)
         
-        if detection_result.hand_landmarks:
-            for hand_landmarks in detection_result.hand_landmarks:
-                hand_points = []
-                for landmark in hand_landmarks:
-                    x = int(landmark.x * image.shape[1])
-                    y = int(landmark.y * image.shape[0])
-                    hand_points.append([x, y])
-                hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
-        
-        return hand_mask > 0
+        return arm_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
