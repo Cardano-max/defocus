@@ -38,9 +38,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.1,
-            min_hand_presence_confidence=0.1,
-            min_tracking_confidence=0.1
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -61,7 +61,7 @@ class Masking:
             mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
             mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                        self.label_map["pants"], self.label_map["skirt"]])
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
@@ -111,6 +111,26 @@ class Masking:
                 cv2.fillPoly(hand_mask, [hand_points], 1)
         
         return hand_mask > 0
+
+    def create_arm_mask(self, pose_data, image_size):
+        arm_mask = np.zeros(image_size[::-1], dtype=np.uint8)
+        
+        # Define the keypoint indices for shoulders, elbows, and wrists
+        left_shoulder_idx, right_shoulder_idx = 5, 2
+        left_elbow_idx, right_elbow_idx = 6, 3
+        left_wrist_idx, right_wrist_idx = 7, 4
+        
+        # Check if the required keypoints are detected
+        if pose_data[left_shoulder_idx].all() and pose_data[left_elbow_idx].all() and pose_data[left_wrist_idx].all() and \
+           pose_data[right_shoulder_idx].all() and pose_data[right_elbow_idx].all() and pose_data[right_wrist_idx].all():
+            
+            # Draw arm masks using the keypoints
+            cv2.line(arm_mask, tuple(pose_data[left_shoulder_idx]), tuple(pose_data[left_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[left_elbow_idx]), tuple(pose_data[left_wrist_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[right_shoulder_idx]), tuple(pose_data[right_elbow_idx]), 255, 10)
+            cv2.line(arm_mask, tuple(pose_data[right_elbow_idx]), tuple(pose_data[right_wrist_idx]), 255, 10)
+        
+        return arm_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
