@@ -38,9 +38,9 @@ class Masking:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            min_hand_detection_confidence=0.7,
-            min_hand_presence_confidence=0.7,
-            min_tracking_confidence=0.7
+            min_hand_detection_confidence=0.5,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
@@ -55,44 +55,40 @@ class Masking:
         keypoints = self.openpose_model(img_resized)
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
-        # Create garment mask
         if category == 'upper_body':
-            garment_mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
         elif category == 'lower_body':
-            garment_mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
+            mask = np.isin(parse_array, [self.label_map["pants"], self.label_map["skirt"]])
         elif category == 'dresses':
-            garment_mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
-                                                 self.label_map["pants"], self.label_map["skirt"]])
+            mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                         self.label_map["pants"], self.label_map["skirt"]])
         else:
             raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-        # Create arm mask
+        # Include arms in the mask
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        mask = np.logical_or(mask, arm_mask)
 
-        # Combine garment and arm masks
-        combined_mask = np.logical_or(garment_mask, arm_mask)
-
-        # Create hand mask
+        # Detect and create hand mask
         hand_mask = self.create_precise_hand_mask(img_np)
-
-        # Remove hands from the combined mask
-        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+        
+        # Remove hands from the mask
+        mask = np.logical_and(mask, np.logical_not(hand_mask))
 
         # Refine the mask
-        combined_mask = self.refine_mask(combined_mask)
-        combined_mask = self.smooth_edges(combined_mask, sigma=1.0)
+        mask = self.refine_mask(mask)
+        mask = self.smooth_edges(mask, sigma=1.0)
 
-        # Ensure the mask covers the full garment and arms
-        combined_mask = self.fill_garment_gaps(combined_mask, parse_array, category)
+        # Ensure the mask covers the full garment
+        mask = self.fill_garment_gaps(mask, parse_array, category)
 
         # Expand the mask slightly
-        combined_mask = self.expand_mask(combined_mask)
+        mask = self.expand_mask(mask)
 
         # Reapply hand mask to ensure hands are not covered
-        combined_mask = np.logical_and(combined_mask, np.logical_not(hand_mask))
+        mask = np.logical_and(mask, np.logical_not(hand_mask))
 
-        # Convert mask to PIL Image and resize to original size
-        mask_pil = Image.fromarray((combined_mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return np.array(mask_pil)
@@ -113,11 +109,11 @@ class Masking:
                     y = int(landmark.y * image.shape[0])
                     hand_points.append([x, y])
                 hand_points = np.array(hand_points, dtype=np.int32)
-                cv2.fillPoly(hand_mask, [hand_points], 1)
+                cv2.fillConvexPoly(hand_mask, hand_points, 1)
         
         # Dilate the hand mask slightly to ensure full coverage
         kernel = np.ones((5,5), np.uint8)
-        hand_mask = cv2.dilate(hand_mask, kernel, iterations=2)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
         
         return hand_mask > 0
 
