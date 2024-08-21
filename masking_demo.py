@@ -6,17 +6,14 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
-from Masking.preprocess.humanparsing.run_parsing import Parsing
-from Masking.preprocess.openpose.run_openpose import OpenPose
+from preprocess.humanparsing.run_parsing import Parsing
+from preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
 import torch
-from diffusers import AutoPipelineForInpainting, AutoencoderKL
-from diffusers.utils import load_image
-
-# Check if CUDA is available, otherwise use CPU
-device = "cuda" if torch.cuda.is_available() else "cpu"
+import torchvision.transforms as transforms
+from torchvision.models.segmentation import deeplabv3_resnet101
 
 def timing(f):
     @wraps(f)
@@ -49,20 +46,16 @@ class Masking:
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
-        # Initialize SDXL inpainting pipeline
-        vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
-        self.pipeline = AutoPipelineForInpainting.from_pretrained(
-            "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
-            vae=vae,
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True
-        ).to(device)
-        self.pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
-
-        # Load body segmentation model
-        from SegBody import segment_body
-        self.segment_body = segment_body
+        # Load DeepLabV3 model for body segmentation
+        self.deeplab_model = deeplabv3_resnet101(pretrained=True)
+        self.deeplab_model.eval()
+        if torch.cuda.is_available():
+            self.deeplab_model.cuda()
+        self.transform = transforms.Compose([
+            transforms.Resize((512, 512)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
 
     @timing
     def get_mask(self, img, category='upper_body'):
@@ -79,12 +72,8 @@ class Masking:
         is_naked = self.is_body_naked(parse_array)
 
         if is_naked:
-            # Use body segmentation for naked bodies
-            _, mask = self.segment_body(img_resized, face=False)
-            mask = np.array(mask.convert('L'))
-            mask = mask > 128  # Convert to binary mask
+            mask = self.create_naked_body_mask(img)
         else:
-            # Use the original masking method for clothed bodies
             if category == 'upper_body':
                 mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
             elif category == 'lower_body':
@@ -97,25 +86,25 @@ class Masking:
 
             mask = self.enhance_garment_mask(mask, parse_array, category)
 
-        # Common processing for both naked and clothed bodies
         hand_mask = self.create_precise_hand_mask(img_np)
         arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        
+        # Combine hand and arm masks
         hand_arm_mask = np.logical_or(hand_mask, arm_mask)
         
-        # For naked bodies, we want to include arms in the mask
-        if is_naked:
-            final_mask = mask
-        else:
-            final_mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+        # Remove hand and arm regions from the mask if not naked
+        if not is_naked:
+            mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
         # Apply final refinements
-        final_mask = self.apply_final_refinements(final_mask)
+        final_mask = self.apply_final_refinements(mask)
 
-        # Include a small portion of the neck (1-2%)
+        # Exclude face and include a small portion of the neck
+        face_mask = np.isin(parse_array, [self.label_map["head"], self.label_map["hair"]])
         neck_mask = np.isin(parse_array, [self.label_map["neck"]])
         neck_mask_dilated = cv2.dilate(neck_mask.astype(np.uint8), np.ones((3,3), np.uint8), iterations=1)
-        neck_border = np.logical_and(neck_mask_dilated, np.logical_not(neck_mask))
-        final_mask = np.logical_or(final_mask, neck_border)
+        final_mask = np.logical_and(final_mask, np.logical_not(face_mask))
+        final_mask = np.logical_or(final_mask, np.logical_and(neck_mask_dilated, np.logical_not(neck_mask)))
 
         mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
@@ -123,11 +112,30 @@ class Masking:
         return mask_pil
 
     def is_body_naked(self, parse_array):
-        clothes_pixels = np.sum(np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+        clothed_pixels = np.sum(np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
                                                       self.label_map["pants"], self.label_map["skirt"]]))
         total_pixels = parse_array.size
-        clothes_ratio = clothes_pixels / total_pixels
-        return clothes_ratio < 0.1    # Adjust this threshold as needed
+        clothing_ratio = clothed_pixels / total_pixels
+        return clothing_ratio < 0.1  # Adjust this threshold as needed
+
+    def create_naked_body_mask(self, img):
+        input_tensor = self.transform(img).unsqueeze(0)
+        if torch.cuda.is_available():
+            input_tensor = input_tensor.cuda()
+        
+        with torch.no_grad():
+            output = self.deeplab_model(input_tensor)['out'][0]
+        
+        output_predictions = output.argmax(0).byte().cpu().numpy()
+        
+        # Class 15 in DeepLabV3 corresponds to the human body
+        body_mask = (output_predictions == 15).astype(np.uint8)
+        
+        # Remove small regions and fill holes
+        body_mask = self.remove_small_regions(body_mask)
+        body_mask = ndimage.binary_fill_holes(body_mask).astype(np.uint8)
+        
+        return body_mask
 
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -201,7 +209,6 @@ class Masking:
         mask_blurred = ndimage.gaussian_filter(mask_float, sigma=sigma)
         mask_smooth = (mask_blurred > 0.5).astype(np.uint8)
         return mask_smooth
-
 
     def remove_small_regions(self, mask, min_size=100):
         labeled, num_features = measure.label(mask, return_num=True)
