@@ -235,6 +235,7 @@ def process_images(input_folder, output_folder, category):
         print()
 
 
+
 if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
