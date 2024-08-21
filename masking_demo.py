@@ -14,7 +14,9 @@ from scipy import ndimage
 import torch
 from diffusers import AutoPipelineForInpainting, AutoencoderKL
 from diffusers.utils import load_image
-from SegBody import segment_body
+
+# Check if CUDA is available, otherwise use CPU
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def timing(f):
     @wraps(f)
@@ -47,16 +49,20 @@ class Masking:
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
-        # Initialize the inpainting pipeline
+        # Initialize SDXL inpainting pipeline
         vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
         self.pipeline = AutoPipelineForInpainting.from_pretrained(
-            "diffusers/stable-diffusion-xl-1.0-inpainting-0.1", 
-            vae=vae, 
-            torch_dtype=torch.float16, 
-            variant="fp16", 
+            "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+            vae=vae,
+            torch_dtype=torch.float16,
+            variant="fp16",
             use_safetensors=True
-        ).to("cuda")
-        self.pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin", low_cpu_mem_usage=True)
+        ).to(device)
+        self.pipeline.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
+
+        # Load body segmentation model
+        from SegBody import segment_body
+        self.segment_body = segment_body
 
     @timing
     def get_mask(self, img, category='upper_body'):
@@ -70,15 +76,15 @@ class Masking:
         pose_data = np.array(keypoints["pose_keypoints_2d"]).reshape((-1, 2))
 
         # Check if the body is naked
-        is_naked = self.check_if_naked(parse_array)
+        is_naked = self.is_body_naked(parse_array)
 
         if is_naked:
-            # Use SegBody for naked body masking
-            _, mask = segment_body(img, face=False)
-            mask = np.array(mask.resize((384, 512), Image.LANCZOS))
-            mask = mask[:,:,0] > 128  # Convert to binary mask
+            # Use body segmentation for naked bodies
+            _, mask = self.segment_body(img_resized, face=False)
+            mask = np.array(mask.convert('L'))
+            mask = mask > 128  # Convert to binary mask
         else:
-            # Use the original masking logic for clothed bodies
+            # Use the original masking method for clothed bodies
             if category == 'upper_body':
                 mask = np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"]])
             elif category == 'lower_body':
@@ -89,39 +95,39 @@ class Masking:
             else:
                 raise ValueError("Invalid category. Choose 'upper_body', 'lower_body', or 'dresses'.")
 
-            hand_mask = self.create_precise_hand_mask(img_np)
-            arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
-            
-            # Combine hand and arm masks
-            hand_arm_mask = np.logical_or(hand_mask, arm_mask)
-            
-            # Enhance the garment mask
             mask = self.enhance_garment_mask(mask, parse_array, category)
-            
-            # Remove hand and arm regions from the enhanced garment mask
-            mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
+
+        # Common processing for both naked and clothed bodies
+        hand_mask = self.create_precise_hand_mask(img_np)
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
+        hand_arm_mask = np.logical_or(hand_mask, arm_mask)
+        
+        # For naked bodies, we want to include arms in the mask
+        if is_naked:
+            final_mask = mask
+        else:
+            final_mask = np.logical_and(mask, np.logical_not(hand_arm_mask))
 
         # Apply final refinements
-        mask = self.apply_final_refinements(mask)
+        final_mask = self.apply_final_refinements(final_mask)
 
         # Include a small portion of the neck (1-2%)
         neck_mask = np.isin(parse_array, [self.label_map["neck"]])
         neck_mask_dilated = cv2.dilate(neck_mask.astype(np.uint8), np.ones((3,3), np.uint8), iterations=1)
-        neck_border = neck_mask_dilated & ~neck_mask
-        mask = np.logical_or(mask, neck_border)
+        neck_border = np.logical_and(neck_mask_dilated, np.logical_not(neck_mask))
+        final_mask = np.logical_or(final_mask, neck_border)
 
-        mask_pil = Image.fromarray((mask * 255).astype(np.uint8))
+        mask_pil = Image.fromarray((final_mask * 255).astype(np.uint8))
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return mask_pil
 
-    def check_if_naked(self, parse_array):
-        clothes_labels = [self.label_map["upper_clothes"], self.label_map["dress"], 
-                          self.label_map["pants"], self.label_map["skirt"]]
-        clothes_pixels = np.sum(np.isin(parse_array, clothes_labels))
+    def is_body_naked(self, parse_array):
+        clothes_pixels = np.sum(np.isin(parse_array, [self.label_map["upper_clothes"], self.label_map["dress"], 
+                                                      self.label_map["pants"], self.label_map["skirt"]]))
         total_pixels = parse_array.size
         clothes_ratio = clothes_pixels / total_pixels
-        return clothes_ratio < 0.1  # Adjust this threshold as needed
+        return clothes_ratio < 0.1    # Adjust this threshold as needed
 
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -233,7 +239,6 @@ def process_images(input_folder, output_folder, category):
         print(f"Mask saved to {output_mask}")
         print(f"Masked output saved to {output_masked}")
         print()
-
 
 
 if __name__ == "__main__":
