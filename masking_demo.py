@@ -74,13 +74,6 @@ def process_images(input_folder, output_folder, category='full_body'):
         print(f"Masked output saved to {output_masked}")
         print()
 
-if __name__ == "__main__":
-    input_folder = Path("/path/to/input/folder")
-    output_folder = Path("/path/to/output/folder")
-    category = "full_body"  # This parameter is kept for consistency, but not used in the SegBody method
-    
-    process_images(str(input_folder), str(output_folder), category)
-
 
 if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
