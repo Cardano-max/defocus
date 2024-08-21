@@ -194,9 +194,10 @@ def process_images(input_folder, output_folder, category):
         print(f"Masked output saved to {output_masked}")
         print()
 
+
 if __name__ == "__main__":
-    input_folder = Path("/path/to/input/folder")
-    output_folder = Path("/path/to/output/folder")
-    category = "dresses"  # Change this to "upper_body", "lower_body", or "dresses" as needed
+    input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
+    output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
+    category = "dresses"  # Change to "upper_body", "lower_body", or "dresses" as needed
     
     process_images(str(input_folder), str(output_folder), category)
