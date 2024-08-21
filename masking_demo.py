@@ -11,7 +11,7 @@ from skimage import measure, morphology
 from scipy import ndimage
 import torch
 import torchvision.transforms as transforms
-from SegBody import SegBody  # Make sure this file is in the same directory
+from SegBody import segment_body  # Import the function directly
 
 def timing(f):
     @wraps(f)
@@ -26,7 +26,6 @@ def timing(f):
 class Masking:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.seg_body = SegBody(self.device)
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -51,7 +50,7 @@ class Masking:
         img_np = np.array(img_resized)
 
         # Get body segmentation mask
-        seg_image, mask_image = self.segment_body(img_resized)
+        seg_image, mask_image = segment_body(img_resized, face=False)
         
         # Convert mask_image to numpy array
         mask_np = np.array(mask_image)
@@ -82,9 +81,6 @@ class Masking:
         mask_pil = mask_pil.resize(img.size, Image.LANCZOS)
         
         return mask_pil
-
-    def segment_body(self, image):
-        return self.seg_body.segment_body(image, face=False)
 
     def create_precise_hand_mask(self, image):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
