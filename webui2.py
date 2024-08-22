@@ -1,3 +1,4 @@
+#defocus_main.py
 import gradio as gr
 import random
 import time
@@ -278,7 +279,7 @@ def virtual_try_on(clothes_image, person_image, category_input):
         # Prepare arguments for the image generation task
         args = [
             True,  # Input image checkbox
-            "",    # Prompt (empty as we're using inpaint_prompt)
+            "Refine th image,",    # Prompt (empty as we're using inpaint_prompt)
             modules.config.default_prompt_negative,  # Negative prompt
             False,  # Advanced checkbox
             modules.config.default_styles,  # Style selections
