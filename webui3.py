@@ -18,7 +18,7 @@ from Masking.masking import Masking
 masker = Masking()
 
 # Function to generate mask
-def generate_mask(person_image, category="dresses"):
+def generate_mask(person_image, category="upper_body"):
     if not isinstance(person_image, Image.Image):
         person_image = Image.fromarray(person_image)
     
@@ -26,7 +26,7 @@ def generate_mask(person_image, category="dresses"):
     return inpaint_mask
 
 # Main function for virtual try-on
-def virtual_try_on(person_image_path, prompt, category="dresses", output_path=None):
+def virtual_try_on(person_image_path, prompt, category="upper_body", output_path=None):
     try:
         # Load person image
         person_image = Image.open(person_image_path)
@@ -60,7 +60,7 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
         # Prepare arguments for the image generation task
         args = [
             True,  # Input image checkbox
-            "Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy",  # Prompt for generating garment
+            prompt,  # Prompt for generating garment
             modules.config.default_prompt_negative,  # Negative prompt
             False,  # Advanced checkbox
             modules.config.default_styles,  # Style selections
@@ -74,7 +74,13 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
             modules.config.default_base_model_name,  # Base model
             modules.config.default_refiner_model_name,  # Refiner model
             modules.config.default_refiner_switch,  # Refiner switch
-        ] + modules.config.default_loras + [
+        ]
+        
+        # Add LoRA arguments
+        for lora in modules.config.default_loras:
+            args.extend(lora)
+
+        args.extend([
             True,  # Current tab (set to True for inpainting)
             "inpaint",  # Inpaint mode
             flags.disabled,  # UOV method
@@ -121,7 +127,7 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
             0,  # Inpaint erode or dilate
             modules.config.default_save_metadata_to_images,  # Save metadata to images
             modules.config.default_metadata_scheme,  # Metadata scheme
-        ]
+        ])
 
         # Create and append the image generation task
         task = worker.AsyncTask(args=args)
@@ -154,8 +160,8 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
 if __name__ == "__main__":
     input_image_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im/ate.png"
     output_image_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/images/result.jpg"
-    prompt = "wearing a red coat"
-    category = "upper_body"  # or "lower_body" or "full_body"
+    prompt = "Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy"
+    category = "dresses"  # or "lower_body" or "full_body"
 
     result = virtual_try_on(input_image_path, prompt, category, output_image_path)
     if result:
