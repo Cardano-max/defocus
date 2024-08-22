@@ -185,8 +185,8 @@ def process_images(input_folder, output_folder, category):
     image_files = [f for f in image_files if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')]
     
     for i, image_file in enumerate(image_files, 1):
-        output_mask = Path(output_folder) / f"output_sharp_mask_{i}.png"
-        output_masked = Path(output_folder) / f"output_masked_image_white_bg_{i}.png"
+        output_mask = Path(output_folder) / f"output_sharp_{i}.png"
+        output_masked = Path(output_folder) / f"output_masked_image_white_{i}.png"
         
         print(f"Processing image {i}/{len(image_files)}: {image_file.name}")
         
