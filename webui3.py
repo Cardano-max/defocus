@@ -161,7 +161,7 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
 
 # Example usage
 if __name__ == "__main__":
-    input_image_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im/ate.png"
+    input_image_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im/atb.jpeg"
     output_image_path = "/Users/ikramali/projects/arbiosft_products/arbi-tryon/images/result.jpg"
     prompt = "Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy"
     category = "dresses"  # or "lower_body" or "full_body"
