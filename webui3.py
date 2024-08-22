@@ -21,7 +21,7 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 masker = Masking()
 
 # Function to generate mask
-def generate_mask(person_image, category="upper_body"):
+def generate_mask(person_image, category="dresses"):
     if not isinstance(person_image, Image.Image):
         person_image = Image.fromarray(person_image)
     
@@ -29,7 +29,7 @@ def generate_mask(person_image, category="upper_body"):
     return inpaint_mask
 
 # Main function for virtual try-on
-def virtual_try_on(person_image_path, prompt, category="upper_body", output_path=None):
+def virtual_try_on(person_image_path, prompt, category="dresses", output_path=None):
     try:
         # Load person image
         person_image = Image.open(person_image_path)
