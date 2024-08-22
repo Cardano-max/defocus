@@ -37,7 +37,6 @@ class Masking:
             "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
             "bag": 16, "scarf": 17, "neck": 18
         }
-        
         base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
@@ -72,18 +71,18 @@ class Masking:
         hand_mask = self.create_precise_hand_mask(img_np)
         
         # Combine all masks that should not be masked
-        unmasked_areas = np.logical_or.reduce((face_head_mask, hair_mask, feet_mask, arm_mask, hand_mask))
+        unmasked_regions = np.logical_or.reduce((face_head_mask, hair_mask, feet_mask, arm_mask, hand_mask))
         
-        # Combine SegBody mask with unmasked areas
-        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(unmasked_areas))
+        # Combine SegBody mask with unmasked regions
+        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(unmasked_regions))
         
         # Apply refinement techniques
         refined_mask = self.refine_mask(combined_mask)
         smooth_mask = self.smooth_edges(refined_mask, sigma=1.0)
         expanded_mask = self.expand_mask(smooth_mask)
         
-        # Ensure unmasked areas remain unmasked
-        final_mask = np.logical_and(expanded_mask, np.logical_not(unmasked_areas))
+        # Ensure unmasked regions are not masked in the final result
+        final_mask = np.logical_and(expanded_mask, np.logical_not(unmasked_regions))
         
         # Convert to PIL Image
         mask_binary = Image.fromarray((final_mask * 255).astype(np.uint8))
@@ -176,7 +175,6 @@ def process_images(input_folder, output_folder, category):
         print(f"Mask saved to {output_mask}")
         print(f"Masked output saved to {output_masked}")
         print()
-
 if __name__ == "__main__":
     input_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/in_im")
     output_folder = Path("/Users/ikramali/projects/arbiosft_products/arbi-tryon/output")
