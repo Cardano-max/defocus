@@ -37,6 +37,7 @@ class Masking:
             "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
             "bag": 16, "scarf": 17, "neck": 18
         }
+        
         base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
@@ -61,7 +62,7 @@ class Masking:
         parse_result, _ = self.parsing_model(img_resized)
         parse_array = np.array(parse_result)
         
-        # Create masks for face, head, hair, feet, arms
+        # Create masks for face, head, hair, feet, and arms
         face_head_mask = np.isin(parse_array, [self.label_map["head"], self.label_map["neck"]])
         hair_mask = (parse_array == self.label_map["hair"])
         feet_mask = np.isin(parse_array, [self.label_map["left_shoe"], self.label_map["right_shoe"]])
@@ -70,19 +71,19 @@ class Masking:
         # Create hand mask
         hand_mask = self.create_precise_hand_mask(img_np)
         
-        # Combine all masks that should not be masked
-        unmasked_regions = np.logical_or.reduce((face_head_mask, hair_mask, feet_mask, arm_mask, hand_mask))
+        # Combine all parts that should not be masked
+        unmasked_parts = np.logical_or.reduce((face_head_mask, hair_mask, feet_mask, arm_mask, hand_mask))
         
-        # Combine SegBody mask with unmasked regions
-        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(unmasked_regions))
+        # Combine SegBody mask with unmasked parts
+        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(unmasked_parts))
         
         # Apply refinement techniques
         refined_mask = self.refine_mask(combined_mask)
         smooth_mask = self.smooth_edges(refined_mask, sigma=1.0)
         expanded_mask = self.expand_mask(smooth_mask)
         
-        # Ensure unmasked regions are not masked in the final result
-        final_mask = np.logical_and(expanded_mask, np.logical_not(unmasked_regions))
+        # Ensure unmasked parts are not masked in the final result
+        final_mask = np.logical_and(expanded_mask, np.logical_not(unmasked_parts))
         
         # Convert to PIL Image
         mask_binary = Image.fromarray((final_mask * 255).astype(np.uint8))
