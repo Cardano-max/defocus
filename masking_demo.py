@@ -6,7 +6,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
-from Maksking.preprocess.humanparsing.run_parsing import Parsing
+from Masking.preprocess.humanparsing.run_parsing import Parsing
 from Masking.preprocess.openpose.run_openpose import OpenPose
 from pathlib import Path
 from skimage import measure, morphology
