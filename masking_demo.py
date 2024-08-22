@@ -7,6 +7,9 @@ from pathlib import Path
 from skimage import measure, morphology
 from scipy import ndimage
 import torch
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 # Ensure torch uses CPU if CUDA is not available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -34,11 +37,22 @@ class Masking:
             "head": 11, "left_leg": 12, "right_leg": 13, "left_arm": 14, "right_arm": 15,
             "bag": 16, "scarf": 17, "neck": 18
         }
+        
+        base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            num_hands=2,
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.7,
+            min_tracking_confidence=0.7
+        )
+        self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
 
     @timing
     def get_mask(self, img, category='full_body'):
         # Resize image to 512x512 for SegBody
         img_resized = img.resize((512, 512), Image.LANCZOS)
+        img_np = np.array(img_resized)
         
         # Use SegBody to create the initial mask
         _, segbody_mask = segment_body(img_resized, face=False)
@@ -48,20 +62,28 @@ class Masking:
         parse_result, _ = self.parsing_model(img_resized)
         parse_array = np.array(parse_result)
         
-        # Create masks for face, head, and hair
+        # Create masks for face, head, hair, feet, arms
         face_head_mask = np.isin(parse_array, [self.label_map["head"], self.label_map["neck"]])
         hair_mask = (parse_array == self.label_map["hair"])
+        feet_mask = np.isin(parse_array, [self.label_map["left_shoe"], self.label_map["right_shoe"]])
+        arm_mask = np.isin(parse_array, [self.label_map["left_arm"], self.label_map["right_arm"]])
         
-        # Combine SegBody mask with face, head, and hair masks
-        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(np.logical_or(face_head_mask, hair_mask)))
+        # Create hand mask
+        hand_mask = self.create_precise_hand_mask(img_np)
+        
+        # Combine all masks that should not be masked
+        unmasked_areas = np.logical_or.reduce((face_head_mask, hair_mask, feet_mask, arm_mask, hand_mask))
+        
+        # Combine SegBody mask with unmasked areas
+        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(unmasked_areas))
         
         # Apply refinement techniques
         refined_mask = self.refine_mask(combined_mask)
         smooth_mask = self.smooth_edges(refined_mask, sigma=1.0)
         expanded_mask = self.expand_mask(smooth_mask)
         
-        # Ensure face, head, and hair are not masked
-        final_mask = np.logical_and(expanded_mask, np.logical_not(np.logical_or(face_head_mask, hair_mask)))
+        # Ensure unmasked areas remain unmasked
+        final_mask = np.logical_and(expanded_mask, np.logical_not(unmasked_areas))
         
         # Convert to PIL Image
         mask_binary = Image.fromarray((final_mask * 255).astype(np.uint8))
@@ -72,6 +94,30 @@ class Masking:
         mask_gray = mask_gray.resize(img.size, Image.LANCZOS)
         
         return mask_binary, mask_gray
+
+    def create_precise_hand_mask(self, image):
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        
+        detection_result = self.hand_landmarker.detect(mp_image)
+        
+        hand_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        
+        if detection_result.hand_landmarks:
+            for hand_landmarks in detection_result.hand_landmarks:
+                hand_points = []
+                for landmark in hand_landmarks:
+                    x = int(landmark.x * image.shape[1])
+                    y = int(landmark.y * image.shape[0])
+                    hand_points.append([x, y])
+                hand_points = np.array(hand_points, dtype=np.int32)
+                cv2.fillPoly(hand_mask, [hand_points], 1)
+        
+        # Dilate the hand mask slightly to ensure full coverage
+        kernel = np.ones((5,5), np.uint8)
+        hand_mask = cv2.dilate(hand_mask, kernel, iterations=1)
+        
+        return hand_mask > 0
 
     def refine_mask(self, mask):
         mask_uint8 = mask.astype(np.uint8) * 255
