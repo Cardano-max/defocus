@@ -60,7 +60,7 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
         # Prepare arguments for the image generation task
         args = [
             True,  # Input image checkbox
-            Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy,  # Prompt for generating garment
+            "Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy"  # Prompt for generating garment
             modules.config.default_prompt_negative,  # Negative prompt
             False,  # Advanced checkbox
             modules.config.default_styles,  # Style selections
