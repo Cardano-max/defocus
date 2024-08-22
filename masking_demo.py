@@ -1,9 +1,6 @@
 import numpy as np
 import cv2
 from PIL import Image
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from functools import wraps
 from time import time
 from pathlib import Path
@@ -17,7 +14,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Import SegBody and other necessary models
 from SegBody import segment_body
 from Masking.preprocess.humanparsing.run_parsing import Parsing
-from Masking.preprocess.openpose.run_openpose import OpenPose
 
 def timing(f):
     @wraps(f)
@@ -32,7 +28,6 @@ def timing(f):
 class Masking:
     def __init__(self):
         self.parsing_model = Parsing(-1)
-        self.openpose_model = OpenPose(-1)
         self.label_map = {
             "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper_clothes": 4,
             "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9, "right_shoe": 10,
@@ -49,22 +44,28 @@ class Masking:
         _, segbody_mask = segment_body(img_resized, face=False)
         segbody_mask = np.array(segbody_mask)
         
-        # Use the previous parsing model to get hair mask
+        # Use the parsing model to get detailed segmentation
         parse_result, _ = self.parsing_model(img_resized)
         parse_array = np.array(parse_result)
-        hair_mask = (parse_array == self.label_map["hair"]).astype(np.uint8)
         
-        # Combine SegBody mask with hair mask
-        combined_mask = np.logical_or(segbody_mask > 128, hair_mask).astype(np.uint8)
+        # Create masks for face, head, and hair
+        face_head_mask = np.isin(parse_array, [self.label_map["head"], self.label_map["neck"]])
+        hair_mask = (parse_array == self.label_map["hair"])
+        
+        # Combine SegBody mask with face, head, and hair masks
+        combined_mask = np.logical_and(segbody_mask > 128, np.logical_not(np.logical_or(face_head_mask, hair_mask)))
         
         # Apply refinement techniques
         refined_mask = self.refine_mask(combined_mask)
         smooth_mask = self.smooth_edges(refined_mask, sigma=1.0)
         expanded_mask = self.expand_mask(smooth_mask)
         
+        # Ensure face, head, and hair are not masked
+        final_mask = np.logical_and(expanded_mask, np.logical_not(np.logical_or(face_head_mask, hair_mask)))
+        
         # Convert to PIL Image
-        mask_binary = Image.fromarray((expanded_mask * 255).astype(np.uint8))
-        mask_gray = Image.fromarray((expanded_mask * 127).astype(np.uint8))
+        mask_binary = Image.fromarray((final_mask * 255).astype(np.uint8))
+        mask_gray = Image.fromarray((final_mask * 127).astype(np.uint8))
         
         # Resize masks back to original image size
         mask_binary = mask_binary.resize(img.size, Image.LANCZOS)
