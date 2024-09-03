@@ -90,7 +90,7 @@ def virtual_try_on(person_image_path, prompt, category="dresses", output_path=No
             None,  # UOV input image
             [],  # Outpaint selections
             {'image': person_image, 'mask': inpaint_mask},  # Inpaint input image
-            prompt,  # Inpaint additional prompt
+            'Remove clothes, full naked, straight pose standing posing forward straight, perfect anatomy',  # Inpaint additional prompt
             inpaint_mask,  # Inpaint mask image
             True,  # Disable preview
             True,  # Disable intermediate results
